@@ -15,6 +15,9 @@ export type Parsed3mf = {
   object: Uint16Array;
   objectBase: number[];
   groups: { label?: string; color?: string }[];
+  /** Część (pozycja z <build>) każdego trójkąta – jednostka, którą można przesuwać po stole. */
+  item: Uint16Array;
+  items: { name: string }[];
 };
 
 export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: string) => Doc): Parsed3mf {
@@ -81,13 +84,18 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
 
   // Przypisanie filamentów (extruder) z konfiguracji slicerów.
   const bambuObj = new Map<string, number>();
+  const objName = new Map<string, string>();
   const bambuPart = new Map<string, number>(); // klucz: "obiekt/część"
   const bambu = read("Metadata/model_settings.config");
   if (bambu) {
     const d = parseXml(bambu);
     for (const o of Array.from(d.getElementsByTagName("object"))) {
       const id = o.getAttribute("id")!;
-      for (const md of Array.from(o.children)) if (md.tagName === "metadata" && md.getAttribute("key") === "extruder") bambuObj.set(id, +md.getAttribute("value")!);
+      for (const md of Array.from(o.children)) {
+        if (md.tagName !== "metadata") continue;
+        if (md.getAttribute("key") === "extruder") bambuObj.set(id, +md.getAttribute("value")!);
+        if (md.getAttribute("key") === "name" && md.getAttribute("value")) objName.set(id, md.getAttribute("value")!);
+      }
       for (const p of Array.from(o.getElementsByTagName("part"))) {
         const e = Array.from(p.getElementsByTagName("metadata")).find((m) => m.getAttribute("key") === "extruder");
         if (e) bambuPart.set(`${id}/${p.getAttribute("id")}`, +e.getAttribute("value")!);
@@ -135,6 +143,8 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
   const chunks: Float32Array[] = [];
   const keys: string[] = []; // klucz grupy każdego trójkąta (kolejno)
   const objOfTri: number[] = [];
+  const itemOfTri: number[] = [];
+  const itemNames: string[] = [];
   const objectBaseKeys: string[] = [];
   let total = 0;
   const instanceKeys = new Map<string, number>();
@@ -147,7 +157,7 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
     return i;
   };
 
-  type Ctx = { path: string; m: Mat; rootId: string; partId?: string; inst: string };
+  type Ctx = { path: string; m: Mat; rootId: string; partId?: string; inst: string; item: number };
   const visit = (o: Element, ctx: Ctx, depth: number) => {
     if (depth > 16) return;
     const mesh = o.getElementsByTagName("mesh")[0];
@@ -158,7 +168,7 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
       const path = (c.getAttribute("p:path") ?? ctx.path).replace(/^\//, "");
       const child = objectsOf(path).get(c.getAttribute("objectid")!);
       if (!child) continue;
-      visit(child, { path, m: mul(parseMat(c.getAttribute("transform")), ctx.m), rootId: ctx.rootId, partId: c.getAttribute("objectid")!, inst: `${ctx.inst}/${ci}` }, depth + 1);
+      visit(child, { path, m: mul(parseMat(c.getAttribute("transform")), ctx.m), rootId: ctx.rootId, partId: c.getAttribute("objectid")!, inst: `${ctx.inst}/${ci}`, item: ctx.item }, depth + 1);
     }
   };
 
@@ -208,6 +218,7 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
       else key = materialKey(mats, tri.getAttribute("pid") ?? objPid, tri.getAttribute("p1") ?? objP) ?? baseKey;
       keys.push(key);
       objOfTri.push(objectId(`${ctx.inst}#${vol}`, baseKey));
+      itemOfTri.push(ctx.item);
     }
     chunks.push(out);
     total += out.length;
@@ -215,17 +226,23 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
 
   const build = root.getElementsByTagName("build")[0];
   const rootObjects = objectsOf(rootPath);
-  const items = build ? Array.from(build.getElementsByTagName("item")) : [];
-  if (items.length) {
-    items.forEach((it, i) => {
+  const buildItems = build ? Array.from(build.getElementsByTagName("item")) : [];
+  if (buildItems.length) {
+    buildItems.forEach((it, i) => {
       const o = rootObjects.get(it.getAttribute("objectid")!);
       const path = (it.getAttribute("p:path") ?? rootPath).replace(/^\//, "");
       const obj = path === rootPath ? o : objectsOf(path).get(it.getAttribute("objectid")!);
-      if (obj) visit(obj, { path, m: parseMat(it.getAttribute("transform")), rootId: it.getAttribute("objectid")!, inst: `${i}` }, 0);
+      if (!obj) return;
+      const id = it.getAttribute("objectid")!;
+      const item = itemNames.push(objName.get(id) ?? obj.getAttribute("name") ?? `Część ${itemNames.length + 1}`) - 1;
+      visit(obj, { path, m: parseMat(it.getAttribute("transform")), rootId: id, inst: `${i}`, item }, 0);
     });
   } else {
     let i = 0;
-    for (const [id, o] of rootObjects) visit(o, { path: rootPath, m: IDENTITY, rootId: id, inst: `${i++}` }, 0);
+    for (const [id, o] of rootObjects) {
+      const item = itemNames.push(objName.get(id) ?? o.getAttribute("name") ?? `Część ${itemNames.length + 1}`) - 1;
+      visit(o, { path: rootPath, m: IDENTITY, rootId: id, inst: `${i++}`, item }, 0);
+    }
   }
 
   const positions = new Float32Array(total);
@@ -254,7 +271,15 @@ export function parse3mf(files: Record<string, Uint8Array>, parseXml: (xml: stri
   keys.forEach((k, i) => (group[i] = Math.min(255, index.get(canon(k))!)));
   const object = new Uint16Array(objOfTri.length);
   objOfTri.forEach((o, i) => (object[i] = Math.min(65535, o)));
-  return { positions, group, object, objectBase: objectBaseKeys.map((k) => index.get(canon(k)) ?? 0), groups };
+  const item = Uint16Array.from(itemOfTri, (v) => Math.min(65535, v));
+  // Nazwy powtarzających się kopii: „Kostka”, „Kostka (2)”…
+  const seen = new Map<string, number>();
+  const items = itemNames.map((n) => {
+    const k = (seen.get(n) ?? 0) + 1;
+    seen.set(n, k);
+    return { name: k > 1 ? `${n} (${k})` : n };
+  });
+  return { positions, group, object, objectBase: objectBaseKeys.map((k) => index.get(canon(k)) ?? 0), groups, item, items };
 }
 
 function sortKey(k: string) {
