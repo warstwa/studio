@@ -31,7 +31,7 @@ export default async function MakerPage({ params }: { params: Promise<{ id: stri
         <Reveal className="profile-hero" style={{ marginBottom: 40 }}>
           <Avatar name={u.name} size="lg" />
           <div>
-            <h1 style={{ fontSize: "clamp(30px,4vw,48px)", fontStretch: "106%" }}>{u.name}</h1>
+            <h1 style={{ fontSize: "clamp(30px,4vw,48px)" }}>{u.name}</h1>
             <div className="row" style={{ marginTop: 10 }}>
               <span className="mono dim">{u.city}</span>
               <span className={`avail${m.available ? "" : " off"}`} style={{ marginLeft: 0 }}>

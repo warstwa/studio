@@ -1,13 +1,19 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, JetBrains_Mono } from "next/font/google";
+import { Figtree, JetBrains_Mono, Outfit } from "next/font/google";
 import "./globals.css";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 
-const sans = Archivo({
+// Tekst i etykiety — Figtree: duża wysokość x, otwarte kształty, czytelna w małych rozmiarach
+const sans = Figtree({
   subsets: ["latin", "latin-ext"],
   variable: "--font-sans",
-  axes: ["wdth"],
+  display: "swap",
+});
+// Nagłówki i logo — Outfit: geometryczny krój w duchu Pantona
+const display = Outfit({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-display",
   display: "swap",
 });
 const mono = JetBrains_Mono({
@@ -26,7 +32,7 @@ export const viewport: Viewport = { themeColor: "#0a0a0b" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pl" className={`${sans.variable} ${mono.variable}`}>
+    <html lang="pl" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
       <body>
         <Nav />
         <main>{children}</main>

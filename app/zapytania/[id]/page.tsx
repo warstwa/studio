@@ -76,7 +76,7 @@ export default async function RequestPage({
           {r.parentId && <span className="tag-help">Prośba o pomoc</span>}
           <span className="mono dim">utworzono {ago(r.createdAt)}</span>
         </div>
-        <h1 style={{ fontSize: "clamp(28px,3.6vw,44px)", fontStretch: "104%", maxWidth: 900, marginBottom: 32 }}>
+        <h1 style={{ fontSize: "clamp(28px,3.6vw,44px)", maxWidth: 900, marginBottom: 32 }}>
           {r.title}
         </h1>
 
