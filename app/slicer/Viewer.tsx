@@ -6,10 +6,16 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const MODEL = new THREE.Color("#c9c7c0");
 const OVERHANG = new THREE.Color("#ef6b5e");
 
-type Props = { positions: Float32Array; overhang: Uint8Array | null; showOverhangs: boolean };
+type Props = {
+  positions: Float32Array;
+  overhang: Uint8Array | null;
+  showOverhangs: boolean;
+  /** Kolor każdego trójkąta (r, g, b w 0–1); brak = jednolity szary. */
+  colors?: Float32Array | null;
+};
 
 /** Podgląd 3D (oś Z w górę, model postawiony na stole i wyśrodkowany). */
-export default function Viewer({ positions, overhang, showOverhangs }: Props) {
+export default function Viewer({ positions, overhang, showOverhangs, colors }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<{ mesh: THREE.Mesh; frame: (fit: boolean) => void } | null>(null);
 
@@ -118,7 +124,7 @@ export default function Viewer({ positions, overhang, showOverhangs }: Props) {
     s.frame(true);
   }, [positions]);
 
-  // Kolory: nawisy wymagające podpór na czerwono.
+  // Kolory części; nawisy wymagające podpór na czerwono.
   useEffect(() => {
     const s = scene.current;
     if (!s) return;
@@ -127,15 +133,17 @@ export default function Viewer({ positions, overhang, showOverhangs }: Props) {
     const a = col.array as Float32Array;
     const tris = a.length / 9;
     for (let t = 0; t < tris; t++) {
-      const c = showOverhangs && overhang && overhang.length === tris && overhang[t] ? OVERHANG : MODEL;
+      let r = MODEL.r, g = MODEL.g, b = MODEL.b;
+      if (showOverhangs && overhang && overhang.length === tris && overhang[t]) (r = OVERHANG.r), (g = OVERHANG.g), (b = OVERHANG.b);
+      else if (colors && colors.length === tris * 3) (r = colors[t * 3]), (g = colors[t * 3 + 1]), (b = colors[t * 3 + 2]);
       for (let v = 0; v < 3; v++) {
-        a[t * 9 + v * 3] = c.r;
-        a[t * 9 + v * 3 + 1] = c.g;
-        a[t * 9 + v * 3 + 2] = c.b;
+        a[t * 9 + v * 3] = r;
+        a[t * 9 + v * 3 + 1] = g;
+        a[t * 9 + v * 3 + 2] = b;
       }
     }
     col.needsUpdate = true;
-  }, [positions, overhang, showOverhangs]);
+  }, [positions, overhang, showOverhangs, colors]);
 
   return <div ref={host} className="viewer" />;
 }
