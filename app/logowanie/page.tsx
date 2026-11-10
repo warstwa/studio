@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { currentUser } from "@/lib/auth";
+import { DEMO_IDS, currentUser, demoLoginEnabled, safeNext } from "@/lib/auth";
 import { listUsers } from "@/lib/data";
 import { demoLoginAction } from "@/app/actions";
 import { Avatar } from "@/components/ui";
@@ -11,12 +11,13 @@ import AuthSide from "@/components/AuthSide";
 export const metadata: Metadata = { title: "Logowanie" };
 export const dynamic = "force-dynamic";
 
-const DEMO = ["u_jan", "u_kuba", "u_tomek", "u_marta"];
+const DEMO = ["u_jan", "u_kuba", "u_tomek", "u_marta"].filter((id) => DEMO_IDS.includes(id));
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
-  const { next } = await searchParams;
-  if (await currentUser()) redirect(next || "/panel");
-  const demo = (await listUsers()).filter((u) => DEMO.includes(u.id)).sort((a, b) => DEMO.indexOf(a.id) - DEMO.indexOf(b.id));
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; wylogowano?: string }> }) {
+  const { next: rawNext, wylogowano } = await searchParams;
+  const next = safeNext(rawNext);
+  if (await currentUser()) redirect(next);
+  const demo = !demoLoginEnabled() ? [] : (await listUsers()).filter((u) => DEMO.includes(u.id)).sort((a, b) => DEMO.indexOf(a.id) - DEMO.indexOf(b.id));
 
   return (
     <div className="auth">
@@ -27,7 +28,9 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           <p className="muted" style={{ marginBottom: 28 }}>
             Nie masz konta? <Link href="/rejestracja" className="accent">Załóż je</Link>
           </p>
+          {wylogowano && <div className="alert info" style={{ marginBottom: 20 }}>Wylogowano ze wszystkich urządzeń.</div>}
           <LoginForm next={next} />
+          {demo.length > 0 && (<>
           <div className="divider mono">lub konto demo</div>
           <div className="demo-list">
             {demo.map((u) => (
@@ -41,7 +44,8 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               </form>
             ))}
           </div>
-          <p className="mono dim" style={{ marginTop: 14 }}>Hasło do kont demo: demo1234</p>
+          <p className="mono dim" style={{ marginTop: 14 }}>Konta demo są wspólne — nie wpisuj w nich prawdziwych danych.</p>
+          </>)}
         </div>
       </div>
     </div>

@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { currentUser } from "@/lib/auth";
 import RegisterForm from "./RegisterForm";
 import AuthSide from "@/components/AuthSide";
 
 export const metadata: Metadata = { title: "Rejestracja" };
+export const dynamic = "force-dynamic";
 
 export default async function RegisterPage({ searchParams }: { searchParams: Promise<{ rola?: string }> }) {
   const { rola } = await searchParams;
+  if (await currentUser()) redirect("/panel");
   return (
     <div className="auth">
       <AuthSide title="Dołącz do sieci ludzi, którzy drukują." />

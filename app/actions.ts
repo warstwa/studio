@@ -2,7 +2,21 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { currentUser, endSession, hashPassword, startSession, verifyPassword } from "@/lib/auth";
+import {
+  DEMO_IDS,
+  clearRateLimit,
+  clientIp,
+  currentUser,
+  demoLoginEnabled,
+  endAllSessions,
+  endSession,
+  hashPassword,
+  rateLimited,
+  safeNext,
+  startSession,
+  verifyPassword,
+} from "@/lib/auth";
+import { burnTime, needsRehash, passwordProblem } from "@/lib/password";
 import * as D from "@/lib/data";
 import { MATERIALS } from "@/lib/types";
 
@@ -16,7 +30,7 @@ const num = (f: FormData, k: string) => {
 
 async function requireUser(next = "/panel") {
   const u = await currentUser();
-  if (!u) redirect(`/logowanie?next=${encodeURIComponent(next)}`);
+  if (!u) redirect(`/logowanie?next=${encodeURIComponent(safeNext(next))}`);
   return u;
 }
 
@@ -29,18 +43,38 @@ function fail(e: unknown): FormState {
 
 /* ───────── auth ───────── */
 
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/;
+
 export async function loginAction(_: FormState, f: FormData): Promise<FormState> {
-  const email = str(f, "email");
-  const pw = String(f.get("password") ?? "");
-  const next = str(f, "next") || "/panel";
+  const email = str(f, "email", 120).toLowerCase();
+  const pw = String(f.get("password") ?? "").slice(0, 200);
+  const next = safeNext(str(f, "next", 300));
+  if (!email || !pw) return { error: "Podaj e-mail i hasło." };
+
+  const ip = await clientIp();
+  if ((await rateLimited(`login:ip:${ip}`, 30, 15 * 60)) || (await rateLimited(`login:email:${email}`, 8, 15 * 60)))
+    return { error: "Zbyt wiele prób logowania. Odczekaj 15 minut i spróbuj ponownie." };
+
   const u = await D.getUserByEmail(email);
-  if (!u || !verifyPassword(pw, u.passHash)) return { error: "Nieprawidłowy e-mail lub hasło." };
+  if (!u) {
+    burnTime(pw);
+    return { error: "Nieprawidłowy e-mail lub hasło." };
+  }
+  if (!verifyPassword(pw, u.passHash)) return { error: "Nieprawidłowy e-mail lub hasło." };
+
+  if (needsRehash(u.passHash)) {
+    u.passHash = hashPassword(pw);
+    await D.saveUser(u);
+  }
+  await clearRateLimit(`login:email:${email}`);
   await startSession(u.id);
-  redirect(next.startsWith("/") ? next : "/panel");
+  redirect(next);
 }
 
 export async function demoLoginAction(f: FormData) {
+  if (!demoLoginEnabled()) return;
   const id = str(f, "id");
+  if (!DEMO_IDS.includes(id)) return;
   const u = await D.getUser(id);
   if (!u) return;
   await startSession(u.id);
@@ -48,14 +82,23 @@ export async function demoLoginAction(f: FormData) {
 }
 
 export async function registerAction(_: FormState, f: FormData): Promise<FormState> {
-  const name = str(f, "name", 60);
+  const name = str(f, "name", 60).replace(/\s+/g, " ");
   const email = str(f, "email", 120).toLowerCase();
   const pw = String(f.get("password") ?? "");
+  const pw2 = String(f.get("password2") ?? "");
   const city = str(f, "city", 60);
   const role = str(f, "role") === "maker" ? "maker" : "client";
   if (name.length < 2) return { error: "Podaj imię i nazwisko." };
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { error: "Podaj poprawny adres e-mail." };
-  if (pw.length < 8) return { error: "Hasło musi mieć co najmniej 8 znaków." };
+  if (!EMAIL_RE.test(email)) return { error: "Podaj poprawny adres e-mail." };
+  const problem = passwordProblem(pw, { email, name });
+  if (problem) return { error: problem };
+  if (pw !== pw2) return { error: "Hasła nie są identyczne." };
+  if (f.get("terms") !== "on") return { error: "Zaakceptuj regulamin, aby założyć konto." };
+
+  const ip = await clientIp();
+  if (await rateLimited(`register:ip:${ip}`, 10, 60 * 60))
+    return { error: "Zbyt wiele nowych kont z tego adresu. Spróbuj ponownie za godzinę." };
+
   try {
     const u = await D.createUser({ name, email, passHash: hashPassword(pw), role, city: city || "Polska" });
     await startSession(u.id);
@@ -68,6 +111,33 @@ export async function registerAction(_: FormState, f: FormData): Promise<FormSta
 export async function logoutAction() {
   await endSession();
   redirect("/");
+}
+
+export async function changePasswordAction(_: FormState, f: FormData): Promise<FormState> {
+  const u = await requireUser("/profil");
+  if (DEMO_IDS.includes(u.id)) return { error: "Hasła kont demonstracyjnych nie można zmieniać." };
+  const cur = String(f.get("current") ?? "");
+  const pw = String(f.get("password") ?? "");
+  const pw2 = String(f.get("password2") ?? "");
+  if (await rateLimited(`pwchange:${u.id}`, 10, 15 * 60)) return { error: "Zbyt wiele prób. Odczekaj chwilę." };
+  if (!verifyPassword(cur, u.passHash)) return { error: "Obecne hasło jest nieprawidłowe." };
+  const problem = passwordProblem(pw, { email: u.email, name: u.name });
+  if (problem) return { error: problem };
+  if (pw !== pw2) return { error: "Nowe hasła nie są identyczne." };
+  if (pw === cur) return { error: "Nowe hasło musi różnić się od obecnego." };
+  u.passHash = hashPassword(pw);
+  await D.saveUser(u);
+  // unieważnij wszystkie sesje (także na innych urządzeniach) i zaloguj ponownie tutaj
+  await endAllSessions(u.id);
+  await startSession(u.id);
+  return { ok: "Hasło zmienione. Wylogowaliśmy Cię ze wszystkich innych urządzeń." };
+}
+
+export async function logoutEverywhereAction() {
+  const u = await requireUser("/profil");
+  await endAllSessions(u.id);
+  await endSession();
+  redirect("/logowanie?wylogowano=1");
 }
 
 /* ───────── profil drukarza ───────── */

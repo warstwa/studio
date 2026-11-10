@@ -1,7 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { currentUser } from "@/lib/auth";
+import { DEMO_IDS, currentUser } from "@/lib/auth";
+import SecurityPanel from "./SecurityPanel";
 import ProfileForm from "./ProfileForm";
 
 export const metadata: Metadata = { title: "Profil" };
@@ -29,6 +30,9 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
         <ProfileForm
           user={{ name: me.name, city: me.city, bio: me.bio, email: me.email, maker: me.maker ?? null }}
         />
+        <div className="two-col" style={{ marginTop: 24 }}>
+          <SecurityPanel isDemo={DEMO_IDS.includes(me.id)} />
+        </div>
       </div>
     </div>
   );
