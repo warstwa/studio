@@ -7,49 +7,60 @@ import {
   MATERIALS,
   MULTI_MODES,
   PROFILES,
-  colorStats,
-  estimate,
   formatDuration,
   rotate90,
-  type ColorStats,
-  type Estimate,
   type MaterialId,
   type MultiMode,
   type PrintSettings,
   type SpeedProfile,
   type SupportType,
 } from "@/lib/slicer/estimate";
-import { ACCEPT, loadModel, mergeModels, type Model } from "@/lib/slicer/load";
+import { ACCEPT, PALETTE, loadModel, mergeModels, type Model } from "@/lib/slicer/load";
+import { BEDS, itemTriangles } from "@/lib/slicer/arrange";
+import { canSplitByColor, checkFileLayout, evaluate, layout, type Filament, type Plan, type PlanInput, type PlacementMode, type PlateMode } from "@/lib/slicer/plan";
+import type { BedRect } from "./Viewer";
 
 const Viewer = dynamic(() => import("./Viewer"), { ssr: false, loading: () => <div className="viewer" /> });
 
 const UNITS = { mm: 1, cm: 10, m: 1000, in: 25.4 } as const;
 type Unit = keyof typeof UNITS;
 type Turn = "x+" | "x-" | "y+" | "y-";
+const PLATE_GAP = 40; // odstęp między stołami w podglądzie (mm)
 
 const fmt = (v: number, d = 0) => v.toLocaleString("pl-PL", { minimumFractionDigits: d, maximumFractionDigits: d });
 const grams = (v: number) => `${fmt(v, v < 10 ? 1 : 0)} g`;
+/** Polska odmiana: 1 stół, 2–4 stoły, 5+ stołów. */
+const plural = (n: number, one: string, few: string, many: string) =>
+  n === 1 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? few : many;
+const plates = (n: number) => `${n} ${plural(n, "stół", "stoły", "stołów")}`;
 
 /** Kolor sRGB (#rrggbb) → liniowy RGB dla WebGL. */
 function linear(hex: string): [number, number, number] {
-  const n = parseInt(hex.slice(1), 16);
+  const n = parseInt(hex.slice(1), 16) || 0;
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
     const c = v / 255;
     return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   }) as [number, number, number];
 }
 
-type Result = { est: Estimate; colors: ColorStats | null };
+type Results = { plan: Plan; other: Plan | null };
 
 export default function SlicerTool() {
   const [model, setModel] = useState<Model | null>(null);
-  const [colors, setColors] = useState<string[]>([]);
+  const [filaments, setFilaments] = useState<Filament[]>([]);
+  const [groupFilament, setGroupFilament] = useState<number[]>([]);
+  const [itemOverride, setItemOverride] = useState<(number | null)[]>([]);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [unit, setUnit] = useState<Unit>("mm");
   const [settings, setSettings] = useState<PrintSettings>(DEFAULT_SETTINGS);
   const [mode, setMode] = useState<MultiMode>("ams");
   const [waste, setWaste] = useState<number>(MULTI_MODES.ams.waste);
-  const [result, setResult] = useState<Result | null>(null);
+  const [bedId, setBedId] = useState(BEDS[0].id);
+  const [placement, setPlacement] = useState<PlacementMode>("file");
+  const [plateMode, setPlateMode] = useState<PlateMode>("single");
+  const [gap, setGap] = useState(6);
+  const [results, setResults] = useState<Results | null>(null);
+  const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drag, setDrag] = useState(false);
@@ -57,6 +68,7 @@ export default function SlicerTool() {
   const input = useRef<HTMLInputElement>(null);
   const appendNext = useRef(false);
 
+  const bed = BEDS.find((b) => b.id === bedId) ?? BEDS[0];
   const set = <K extends keyof PrintSettings>(k: K, v: PrintSettings[K]) => setSettings((s) => ({ ...s, [k]: v }));
 
   // Skala jednostek + obroty użytkownika.
@@ -69,44 +81,93 @@ export default function SlicerTool() {
     return p;
   }, [model, unit, turns]);
 
-  // Grupy o tym samym kolorze to ten sam filament.
-  const filaments = useMemo(() => {
-    const list = Array.from(new Set(colors.map((c) => c.toLowerCase())));
-    return { list, ofGroup: colors.map((c) => list.indexOf(c.toLowerCase())) };
-  }, [colors]);
+  const itemTris = useMemo(() => (model ? itemTriangles(model.item, model.items.length) : []), [model]);
 
-  const triColors = useMemo(() => {
-    if (!model || colors.length < 2) return null;
-    const lin = colors.map(linear);
-    const out = new Float32Array(model.group.length * 3);
-    for (let t = 0; t < model.group.length; t++) {
-      const c = lin[model.group[t]] ?? lin[0];
-      out[t * 3] = c[0];
-      out[t * 3 + 1] = c[1];
-      out[t * 3 + 2] = c[2];
-    }
-    return out;
-  }, [model, colors]);
+  // Grupy kolorów z pliku obecne w każdej części.
+  const itemGroups = useMemo(() => {
+    if (!model) return [];
+    const sets = model.items.map(() => new Set<number>());
+    for (let t = 0; t < model.item.length; t++) sets[model.item[t]].add(model.group[t]);
+    return sets.map((s) => Array.from(s));
+  }, [model]);
+
+  const planInput = useMemo<PlanInput | null>(() => {
+    if (!model || !positions || !filaments.length) return null;
+    const fil = (g: number) => Math.min(filaments.length - 1, groupFilament[g] ?? 0);
+    const triFilament = new Uint8Array(model.group.length);
+    for (let t = 0; t < triFilament.length; t++) triFilament[t] = itemOverride[model.item[t]] ?? fil(model.group[t]);
+    const objItem = new Array<number>(model.objectBase.length).fill(-1);
+    for (let t = 0; t < model.object.length; t++) if (objItem[model.object[t]] < 0) objItem[model.object[t]] = model.item[t];
+    const objectFilament = model.objectBase.map((g, o) => itemOverride[objItem[o]] ?? fil(g));
+    const itemFilament = model.items.map((_, i) => {
+      if (itemOverride[i] != null) return itemOverride[i];
+      const fs = new Set(itemGroups[i].map(fil));
+      return fs.size === 1 ? [...fs][0] : null;
+    });
+    return { positions, itemTris, itemNames: model.items.map((i) => i.name), object: model.object, triFilament, objectFilament, itemFilament, filaments };
+  }, [model, positions, filaments, groupFilament, itemOverride, itemTris, itemGroups]);
+
+  const splittable = planInput ? canSplitByColor(planInput) : false;
+  const effPlateMode: PlateMode = splittable ? plateMode : "single";
+  const effPlacement: PlacementMode = effPlateMode === "perColor" ? "auto" : placement;
+
+  // Układ zależy tylko od geometrii, stołu i przypisań części – nie od ustawień druku.
+  const lay = useMemo(() => (planInput ? layout(planInput, bed, effPlacement, effPlateMode, gap) : null), [planInput, bed, effPlacement, effPlateMode, gap]);
+  const otherLay = useMemo(() => {
+    if (!planInput || !splittable) return null;
+    return effPlateMode === "perColor" ? layout(planInput, bed, placement, "single", gap) : layout(planInput, bed, "auto", "perColor", gap);
+  }, [planInput, splittable, effPlateMode, bed, placement, gap]);
+  const fileCheck = useMemo(() => (planInput && effPlacement === "file" ? checkFileLayout(planInput, bed) : null), [planInput, effPlacement, bed]);
 
   useEffect(() => {
-    if (!positions || !model) return setResult(null);
+    if (!planInput || !lay) return setResults(null);
+    setBusy(true);
     const id = setTimeout(() => {
       try {
-        const est = estimate(positions, settings);
-        let cs: ColorStats | null = null;
-        if (filaments.list.length > 1) {
-          const tri = new Uint8Array(model.group.length);
-          for (let t = 0; t < tri.length; t++) tri[t] = filaments.ofGroup[model.group[t]] ?? 0;
-          cs = colorStats(positions, tri, model.object, model.objectBase.map((g) => filaments.ofGroup[g] ?? 0), filaments.list.length, est, settings, mode, waste);
-        }
-        setResult({ est, colors: cs });
+        const s = { ...settings, material: filaments[0]?.material ?? settings.material };
+        const plan = evaluate(planInput, lay.plates, lay.oversize, bed, s, mode, waste);
+        const other = otherLay ? evaluate(planInput, otherLay.plates, otherLay.oversize, bed, s, mode, waste) : null;
+        setResults({ plan, other });
         setError(null);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Nie udało się przeanalizować modelu.");
+      } finally {
+        setBusy(false);
       }
     }, 60);
     return () => clearTimeout(id);
-  }, [positions, model, settings, filaments, mode, waste]);
+  }, [planInput, lay, otherLay, settings, mode, waste, bed, filaments]);
+
+  // Dane do podglądu: stoły obok siebie.
+  const view = useMemo(() => {
+    const plan = results?.plan;
+    if (!plan || !plan.plates.length) return null;
+    const n = plan.plates.reduce((a, p) => a + p.positions.length, 0);
+    const pos = new Float32Array(n);
+    const col = new Float32Array(n / 3);
+    const ov = new Uint8Array(n / 9);
+    const lin = filaments.map((f) => linear(f.color));
+    const beds: BedRect[] = [];
+    let o = 0, t = 0;
+    plan.plates.forEach((p, i) => {
+      const ox = i * (bed.w + PLATE_GAP);
+      beds.push({ x: ox, y: 0, w: bed.w, d: bed.d, label: p.label });
+      for (let k = 0; k < p.positions.length; k += 3) {
+        pos[o + k] = p.positions[k] + ox;
+        pos[o + k + 1] = p.positions[k + 1];
+        pos[o + k + 2] = p.positions[k + 2];
+      }
+      o += p.positions.length;
+      for (let q = 0; q < p.triFilament.length; q++, t++) {
+        const c = lin[p.triFilament[q]] ?? lin[0];
+        col[t * 3] = c[0];
+        col[t * 3 + 1] = c[1];
+        col[t * 3 + 2] = c[2];
+        ov[t] = p.est.overhang[q];
+      }
+    });
+    return { pos, col, ov, beds };
+  }, [results, filaments, bed]);
 
   const open = useCallback(async (list: FileList | File[] | undefined | null, append: boolean) => {
     const files = Array.from(list ?? []);
@@ -119,15 +180,28 @@ export default function SlicerTool() {
         const part = await loadModel(f);
         m = m ? mergeModels(m, part) : part;
       }
+      const fromGroups = (gs: Model["groups"], offset: number) =>
+        gs.map((g, i) => ({ label: g.label, color: g.color || PALETTE[(offset + i) % PALETTE.length], material: "PLA" as MaterialId }));
       setModel((prev) => {
-        const next = append && prev ? mergeModels(prev, m!) : m!;
-        // przy dodawaniu części zachowaj kolory wybrane wcześniej
-        setColors((old) => (append && prev ? [...old.slice(0, prev.groups.length), ...next.groups.slice(prev.groups.length).map((g) => g.color)] : next.groups.map((g) => g.color)));
+        const keep = append && prev;
+        const next = keep ? mergeModels(prev, m!) : m!;
+        const pg = keep ? prev.groups.length : 0;
+        const pi = keep ? prev.items.length : 0;
+        setFilaments((old) => {
+          const base = keep ? old : [];
+          // nowe grupy dostają nowe filamenty
+          const added = fromGroups(next.groups.slice(pg), base.length);
+          setGroupFilament((gf) => [...(keep ? gf.slice(0, pg) : []), ...added.map((_, i) => base.length + i)]);
+          return [...base, ...added];
+        });
+        setItemOverride((ov) => [...(keep ? ov.slice(0, pi) : []), ...next.items.slice(pi).map(() => null)]);
         return next;
       });
       if (!append) {
         setTurns([]);
         setUnit("mm");
+        setPlacement("file");
+        setPlateMode("single");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Nie udało się wczytać pliku.");
@@ -140,14 +214,22 @@ export default function SlicerTool() {
     appendNext.current = append;
     input.current?.click();
   };
+  const setFilament = (i: number, patch: Partial<Filament>) => setFilaments((fs) => fs.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  const addFilament = () =>
+    setFilaments((fs) => [...fs, { label: `Filament ${fs.length + 1}`, color: PALETTE[fs.length % PALETTE.length], material: fs[fs.length - 1]?.material ?? "PLA" }]);
 
+  const plan = results?.plan;
+  const other = results?.other;
   const q = settings.quantity;
-  const est = result?.est;
-  const cs = result?.colors;
-  const seconds = est ? est.seconds + (cs?.extraSeconds ?? 0) : 0;
-  const totalGrams = est ? est.modelGrams + est.supportGrams + (cs?.wasteGrams ?? 0) : 0;
-  const filamentArea = Math.PI * (settings.filamentDiameter / 2) ** 2;
-  const totalMeters = est ? est.meters + ((cs?.wasteGrams ?? 0) / MATERIALS[settings.material].density) * 1000 / filamentArea / 1000 : 0;
+  const usedFilaments = plan ? plan.grams.map((g, i) => (g > 0.0001 ? i : -1)).filter((i) => i >= 0) : [];
+  const multi = usedFilaments.length > 1;
+  const one = plan && plan.plates.length === 1 ? plan.plates[0] : null;
+  const supportGrams = plan ? plan.plates.reduce((a, p) => a + (p.est.support / 1000) * MATERIALS[filaments[p.cs.main]?.material ?? "PLA"].density, 0) : 0;
+  const totalGrams = plan ? plan.grams.reduce((a, g) => a + g, 0) + plan.wasteGrams : 0;
+  const extraSeconds = plan ? plan.plates.reduce((a, p) => a + p.cs.extraSeconds, 0) : 0;
+  const names = model?.items.map((i) => i.name) ?? [];
+  const singleTotal = other && effPlateMode === "perColor" ? other : plan;
+  const perColorTotal = other && effPlateMode === "perColor" ? plan : other;
 
   return (
     <div className="two-col slicer">
@@ -179,9 +261,14 @@ export default function SlicerTool() {
               </div>
             )}
           </div>
-          {positions ? (
+          {view ? (
             <div className="viewer-wrap">
-              <Viewer positions={positions} overhang={est?.overhang ?? null} showOverhangs={showOverhangs} colors={triColors} />
+              <Viewer positions={view.pos} overhang={view.ov} showOverhangs={showOverhangs} colors={view.col} beds={view.beds} />
+              {plan && plan.plates.length > 1 && (
+                <div className="plate-tags mono">
+                  {plan.plates.map((p) => <span key={p.label}>{p.label}</span>)}
+                </div>
+              )}
               <div className="viewer-tools">
                 <div className="tool-group" role="group" aria-label="Obrót modelu">
                   <span className="mono dim">Obróć</span>
@@ -204,6 +291,8 @@ export default function SlicerTool() {
                 </label>
               </div>
             </div>
+          ) : model ? (
+            <div className="viewer" />
           ) : (
             <button type="button" className="drop-cta" onClick={() => pick(false)} disabled={!!loading}>
               <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.3" aria-hidden>
@@ -212,12 +301,12 @@ export default function SlicerTool() {
               </svg>
               <b>Przeciągnij plik tutaj lub kliknij, aby wybrać</b>
               <span className="mono dim">STL · 3MF · STEP — plik nie opuszcza Twojej przeglądarki</span>
-              <span className="mono dim">Wielokolorowy: 3MF z kolorami albo kilka plików naraz (jeden plik = jeden kolor)</span>
+              <span className="mono dim">Wielokolorowy: 3MF z kolorami albo kilka plików naraz (jeden plik = jedna część)</span>
             </button>
           )}
-          {loading && (
+          {(loading || busy) && (
             <div className="viewer-status mono">
-              <span className="spinner" /> {loading}
+              <span className="spinner" /> {loading ?? "Liczenie…"}
             </div>
           )}
         </div>
@@ -227,32 +316,55 @@ export default function SlicerTool() {
         {model && (
           <div className="panel">
             <div className="panel-head">
-              <span className="mono">03 · Kolory</span>
-              <span className="mono dim">{filaments.list.length > 1 ? `${filaments.list.length} filamenty` : "jednokolorowy"}</span>
+              <span className="mono">03 · Filamenty i części</span>
+              <span className="mono dim">{multi ? `${usedFilaments.length} filamenty w użyciu` : "jeden filament"}</span>
             </div>
             <div className="panel-body stack-sm">
-              <ul className="color-list">
-                {model.groups.map((g, i) => (
-                  <li key={i}>
-                    <input type="color" className="color-input" value={colors[i] ?? "#cccccc"} aria-label={`Kolor: ${g.label}`}
-                      onChange={(e) => setColors((c) => c.map((x, j) => (j === i ? e.target.value : x)))} />
-                    <span className="ellipsis">{g.label}</span>
-                    <span className="mono dim">{cs ? grams(cs.grams[filaments.ofGroup[i]] * q) : est ? grams((est.modelGrams + est.supportGrams) * q) : ""}</span>
-                  </li>
-                ))}
-              </ul>
-              {model.groups.length > 1 && <p className="hint">Części w tym samym kolorze liczą się jako jeden filament.</p>}
-              {filaments.list.length < 2 && (
-                <div className="multi-empty">
-                  <p>
-                    Druk wielokolorowy: dodaj części w innych kolorach (osobne pliki STL/STEP) albo wgraj 3MF z kolorami z Bambu Studio, OrcaSlicera lub PrusaSlicera.
-                  </p>
-                  <button type="button" className="btn btn-sm" onClick={() => pick(true)}>
-                    + Dodaj część w innym kolorze
-                  </button>
-                </div>
-              )}
-              {filaments.list.length > 1 && (
+              <div>
+                <span className="label">Filamenty</span>
+                <ul className="color-list">
+                  {filaments.map((f, i) => (
+                    <li key={i} className="filament-row">
+                      <input type="color" className="color-input" value={f.color} aria-label={`Kolor: ${f.label}`} onChange={(e) => setFilament(i, { color: e.target.value })} />
+                      <input className="input input-sm" value={f.label} aria-label="Nazwa filamentu" onChange={(e) => setFilament(i, { label: e.target.value })} />
+                      <select className="select select-sm" value={f.material} aria-label={`Materiał: ${f.label}`} onChange={(e) => setFilament(i, { material: e.target.value as MaterialId })}>
+                        {Object.entries(MATERIALS).map(([id, m]) => <option key={id} value={id}>{m.name}</option>)}
+                      </select>
+                      <span className="mono dim num">{plan ? (plan.grams[i] > 0.0001 ? grams(plan.grams[i] * q) : "—") : ""}</span>
+                    </li>
+                  ))}
+                </ul>
+                <button type="button" className="btn btn-ghost btn-sm add-btn" onClick={addFilament}>
+                  + Dodaj filament
+                </button>
+              </div>
+
+              <div>
+                <span className="label">Części ({model.items.length})</span>
+                <ul className="color-list">
+                  {model.items.map((it, i) => {
+                    const fromFile = itemGroups[i] ?? [];
+                    const multiFile = new Set(fromFile.map((g) => groupFilament[g])).size > 1;
+                    const current = itemOverride[i];
+                    const shown = current ?? (multiFile ? null : groupFilament[fromFile[0]] ?? 0);
+                    const plate = plan?.plates.findIndex((p) => p.items.includes(i)) ?? -1;
+                    return (
+                      <li key={i} className="part-row">
+                        <i className={`dot${shown === null ? " multi" : ""}`} style={shown !== null ? { background: filaments[shown]?.color } : undefined} />
+                        <span className="ellipsis" title={it.name}>{it.name}</span>
+                        <select className="select select-sm" value={current === null ? "file" : String(current)} aria-label={`Filament części ${it.name}`}
+                          onChange={(e) => setItemOverride((ov) => ov.map((v, j) => (j === i ? (e.target.value === "file" ? null : +e.target.value) : v)))}>
+                          <option value="file">{multiFile ? `Z pliku (${new Set(fromFile.map((g) => groupFilament[g])).size} kolory)` : `Z pliku · ${filaments[groupFilament[fromFile[0]] ?? 0]?.label ?? ""}`}</option>
+                          {filaments.map((f, j) => <option key={j} value={j}>{f.label} · {MATERIALS[f.material].name}</option>)}
+                        </select>
+                        <span className="mono dim num">{plan && plan.plates.length > 1 && plate >= 0 ? `stół ${plate + 1}` : ""}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+
+              {multi && (
                 <>
                   <div className="field">
                     <span className="label">Zmiana koloru</span>
@@ -273,17 +385,16 @@ export default function SlicerTool() {
                         onChange={(e) => setWaste(Math.max(0, Math.min(5, +e.target.value || 0)))} />
                     </div>
                   )}
-                  {cs && (
+                  {plan && (
                     <div className="spec">
-                      <div className="spec-row"><span>{mode === "manual" ? "Ręczne zmiany filamentu" : "Zmiany koloru"}</span><span>{fmt(cs.changes * (mode === "manual" ? 1 : q))}</span></div>
-                      {mode !== "manual" && <div className="spec-row"><span>Odpad (płukanie + wieża)</span><span>{grams(cs.wasteGrams * q)}</span></div>}
-                      {mode !== "manual" && <div className="spec-row"><span>Dodatkowy czas</span><span>{formatDuration(cs.extraSeconds * q)}</span></div>}
-                      {mode !== "manual" && <div className="spec-row"><span>Warstwy ze zmianą</span><span>{fmt(cs.layersWithChanges)} z {fmt(est!.layers)}</span></div>}
+                      <div className="spec-row"><span>{mode === "manual" ? "Ręczne zmiany filamentu" : "Zmiany koloru"}</span><span>{fmt(plan.changes * q)}</span></div>
+                      {mode !== "manual" && <div className="spec-row"><span>Odpad (płukanie + wieża)</span><span>{grams(plan.wasteGrams * q)}</span></div>}
+                      {mode !== "manual" && <div className="spec-row"><span>Dodatkowy czas</span><span>{formatDuration(extraSeconds * q)}</span></div>}
                     </div>
                   )}
-                  {cs && mode === "manual" && cs.mixedLayers > 0 && (
+                  {plan && mode === "manual" && plan.plates.some((p) => p.cs.mixedLayers > 0) && (
                     <div className="alert warn">
-                      {fmt(cs.mixedLayers)} warstw ma więcej niż jeden kolor — ręczna zmiana na wysokości tego nie wydrukuje. Potrzebny AMS/MMU albo zmieniacz narzędzi.
+                      {fmt(plan.plates.reduce((a, p) => a + p.cs.mixedLayers, 0))} warstw ma więcej niż jeden kolor — ręczna zmiana na wysokości tego nie wydrukuje. Potrzebny AMS/MMU albo zmieniacz narzędzi.
                     </div>
                   )}
                 </>
@@ -292,51 +403,162 @@ export default function SlicerTool() {
           </div>
         )}
 
-        {est && (
+        {model && (
+          <div className="panel">
+            <div className="panel-head">
+              <span className="mono">04 · Stół i rozmieszczenie</span>
+              <span className="mono dim">{plan ? plates(plan.plates.length) : ""}</span>
+            </div>
+            <div className="panel-body stack-sm">
+              <div className="field">
+                <label htmlFor="bed">Drukarka (stół)</label>
+                <select className="select" id="bed" value={bedId} onChange={(e) => setBedId(e.target.value)}>
+                  {BEDS.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              <div className="field">
+                <span className="label">Rozmieszczenie</span>
+                <div className="seg">
+                  <label className={effPlateMode === "perColor" ? "disabled" : ""}>
+                    <input type="radio" name="placement" checked={effPlacement === "file"} disabled={effPlateMode === "perColor"} onChange={() => setPlacement("file")} />
+                    <b>Jak w pliku</b>
+                    <span>układ z 3MF / CAD bez zmian</span>
+                  </label>
+                  <label>
+                    <input type="radio" name="placement" checked={effPlacement === "auto"} onChange={() => setPlacement("auto")} />
+                    <b>Automatycznie</b>
+                    <span>bez kolizji, jak najciaśniej</span>
+                  </label>
+                </div>
+              </div>
+              {effPlacement === "auto" && (
+                <div className="field inline-field">
+                  <label htmlFor="gap">Odstęp między częściami (mm)</label>
+                  <input id="gap" className="input" type="number" min={1} max={30} step={1} value={gap} onChange={(e) => setGap(Math.max(1, Math.min(30, Math.round(+e.target.value) || 1)))} />
+                </div>
+              )}
+              <div className="field">
+                <span className="label">Stoły</span>
+                <div className="seg">
+                  <label>
+                    <input type="radio" name="plates" checked={effPlateMode === "single"} onChange={() => setPlateMode("single")} />
+                    <b>Wspólny stół</b>
+                    <span>wszystkie kolory razem</span>
+                  </label>
+                  <label className={splittable ? "" : "disabled"} title={splittable ? "" : "Potrzebne co najmniej dwie części w różnych kolorach"}>
+                    <input type="radio" name="plates" checked={effPlateMode === "perColor"} disabled={!splittable} onChange={() => setPlateMode("perColor")} />
+                    <b>Kolor na osobnym stole</b>
+                    <span>{splittable ? "bez zmian koloru i odpadu" : "wymaga części w różnych kolorach"}</span>
+                  </label>
+                </div>
+              </div>
+
+              {fileCheck && fileCheck.overlaps.length > 0 && (
+                <div className="alert warn action-alert">
+                  <span>
+                    Części nachodzą na siebie:{" "}
+                    {fileCheck.overlaps.slice(0, 4).map(([a, b]) => `${names[a]} ↔ ${names[b]}`).join(", ")}
+                    {fileCheck.overlaps.length > 4 ? ` i ${fileCheck.overlaps.length - 4} więcej` : ""}. Jeśli to elementy jednego wydruku wielokolorowego, zostaw układ z pliku.
+                  </span>
+                  <button type="button" className="btn btn-sm" onClick={() => setPlacement("auto")}>Rozmieść automatycznie</button>
+                </div>
+              )}
+              {fileCheck && !fileCheck.fits && (
+                <div className="alert warn action-alert">
+                  <span>Układ z pliku zajmuje {fmt(fileCheck.size[0])} × {fmt(fileCheck.size[1])} mm — nie mieści się na stole {bed.w} × {bed.d} mm.</span>
+                  <button type="button" className="btn btn-sm" onClick={() => setPlacement("auto")}>Rozmieść automatycznie</button>
+                </div>
+              )}
+              {fileCheck && fileCheck.tooTall.length > 0 && (
+                <div className="alert warn">Za wysokie dla tej drukarki (max {bed.h} mm): {fileCheck.tooTall.map((i) => names[i]).join(", ")}.</div>
+              )}
+              {plan && plan.oversize.length > 0 && (
+                <div className="alert warn">Nie mieści się na stole {bed.w} × {bed.d} mm: {plan.oversize.map((i) => names[i]).join(", ")}.</div>
+              )}
+
+              {singleTotal && perColorTotal && (
+                <div className="compare">
+                  <div className={effPlateMode === "single" ? "on" : ""}>
+                    <span className="mono dim">Wspólny stół</span>
+                    <b>{formatDuration(singleTotal.seconds * q)}</b>
+                    <span className="mono dim">{plates(singleTotal.plates.length)} · odpad {grams(singleTotal.wasteGrams * q)} · {fmt(singleTotal.changes * q)} {plural(singleTotal.changes * q, "zmiana", "zmiany", "zmian")}</span>
+                  </div>
+                  <div className={effPlateMode === "perColor" ? "on" : ""}>
+                    <span className="mono dim">Kolor na osobnym stole</span>
+                    <b>{formatDuration(perColorTotal.seconds * q)}</b>
+                    <span className="mono dim">{plates(perColorTotal.plates.length)} · odpad {grams(perColorTotal.wasteGrams * q)} · {fmt(perColorTotal.changes * q)} {plural(perColorTotal.changes * q, "zmiana", "zmiany", "zmian")}</span>
+                  </div>
+                  <p className="mono dim">
+                    {perColorTotal.seconds < singleTotal.seconds
+                      ? `Osobne stoły oszczędzają ${formatDuration((singleTotal.seconds - perColorTotal.seconds) * q)} i ${grams(Math.max(0, singleTotal.wasteGrams - perColorTotal.wasteGrams) * q)} filamentu, ale wymagają ${perColorTotal.plates.length - 1 === 1 ? "jednej wymiany" : `${perColorTotal.plates.length - 1} wymian`} stołu.`
+                      : `Wspólny stół jest szybszy o ${formatDuration((perColorTotal.seconds - singleTotal.seconds) * q)} — każdy dodatkowy stół to osobne nagrzewanie i start.`}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {plan && (
           <>
             <div className="kpis slicer-kpis">
               <div className="kpi">
                 <span className="mono dim">Czas druku{q > 1 ? ` · ${q} szt.` : ""}</span>
-                <b>{formatDuration(seconds * q)}</b>
+                <b>{formatDuration(plan.seconds * q)}</b>
                 <span className="mono dim">
-                  {q > 1 ? `${formatDuration(seconds)} / szt.` : cs && cs.extraSeconds > 0 ? `w tym zmiany koloru ${formatDuration(cs.extraSeconds)}` : " "}
+                  {plan.plates.length > 1 ? plates(plan.plates.length) : q > 1 ? `${formatDuration(plan.seconds)} / szt.` : extraSeconds > 0 ? `w tym zmiany koloru ${formatDuration(extraSeconds)}` : " "}
                 </span>
               </div>
               <div className="kpi">
                 <span className="mono dim">Filament{q > 1 ? ` · ${q} szt.` : ""}</span>
                 <b>{grams(totalGrams * q)}</b>
-                <span className="mono dim">{fmt(totalMeters * q, 2)} m · {MATERIALS[settings.material].name}{cs ? ` · ${filaments.list.length} kolory` : ""}</span>
+                <span className="mono dim">{fmt(plan.meters * q, 2)} m{multi ? ` · ${usedFilaments.length} filamenty` : ` · ${MATERIALS[filaments[usedFilaments[0] ?? 0]?.material ?? "PLA"].name}`}</span>
               </div>
               <div className="kpi">
-                <span className="mono dim">{cs && cs.wasteGrams > 0 ? "Podpory / odpad" : "W tym podpory"}</span>
+                <span className="mono dim">{plan.wasteGrams > 0 ? "Podpory / odpad" : "W tym podpory"}</span>
                 <b>
-                  {settings.supports === "none" ? "—" : grams(est.supportGrams * q)}
-                  {cs && cs.wasteGrams > 0 && <> / {grams(cs.wasteGrams * q)}</>}
+                  {settings.supports === "none" ? "—" : grams(supportGrams * q)}
+                  {plan.wasteGrams > 0 && <> / {grams(plan.wasteGrams * q)}</>}
                 </b>
                 <span className="mono dim">
-                  {settings.supports === "none"
-                    ? est.overhang.some(Boolean) ? "podpory wyłączone · model ma nawisy" : "podpory wyłączone"
-                    : est.supportGrams > 0 ? `${fmt(est.overhangArea / 100, 1)} cm² nawisów` : "podpory niepotrzebne"}
+                  {settings.supports === "none" ? "podpory wyłączone" : supportGrams > 0 ? `${fmt(plan.plates.reduce((a, p) => a + p.est.overhangArea, 0) / 100, 1)} cm² nawisów` : "podpory niepotrzebne"}
                 </span>
               </div>
             </div>
 
-            <div className="specs">
-              <div><span className="mono dim">Wymiary</span><div className="v">{est.size.map((v) => fmt(v, 1)).join(" × ")} mm</div></div>
-              <div><span className="mono dim">Objętość bryły</span><div className="v">{fmt(est.volume / 1000, 1)} cm³</div></div>
-              <div><span className="mono dim">Model / podpory</span><div className="v">{fmt(est.modelGrams, 1)} g / {fmt(est.supportGrams, 1)} g</div></div>
-              <div><span className="mono dim">Warstwy</span><div className="v">{fmt(est.layers)} × {settings.layerHeight} mm</div></div>
-              <div><span className="mono dim">Obrysy</span><div className="v">{fmt(est.shell / 1000, 1)} cm³</div></div>
-              <div><span className="mono dim">Wypełnienie</span><div className="v">{fmt(est.infill / 1000, 1)} cm³</div></div>
-              <div><span className="mono dim">Podpory</span><div className="v">{fmt(est.support / 1000, 1)} cm³</div></div>
-              <div><span className="mono dim">Trójkąty</span><div className="v">{fmt(est.triangles)}</div></div>
-            </div>
+            {plan.plates.length > 1 && (
+              <div className="plates-table">
+                <div className="mono dim"><span>Stół</span><span>Części</span><span>Czas</span><span>Filament</span><span>Zmiany</span></div>
+                {plan.plates.map((p) => (
+                  <div key={p.label}>
+                    <span>{p.label}</span>
+                    <span>{p.items.length}</span>
+                    <span>{formatDuration(p.seconds * q)}</span>
+                    <span>{grams((p.grams.reduce((a, g) => a + g, 0) + p.wasteGrams) * q)}</span>
+                    <span>{fmt(p.cs.changes * q)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
 
-            {est.warnings.map((w) => (
+            {one && (
+              <div className="specs">
+                <div><span className="mono dim">Wymiary</span><div className="v">{one.est.size.map((v) => fmt(v, 1)).join(" × ")} mm</div></div>
+                <div><span className="mono dim">Objętość bryły</span><div className="v">{fmt(one.est.volume / 1000, 1)} cm³</div></div>
+                <div><span className="mono dim">Warstwy</span><div className="v">{fmt(one.est.layers)} × {settings.layerHeight} mm</div></div>
+                <div><span className="mono dim">Trójkąty</span><div className="v">{fmt(one.est.triangles)}</div></div>
+                <div><span className="mono dim">Obrysy</span><div className="v">{fmt(one.est.shell / 1000, 1)} cm³</div></div>
+                <div><span className="mono dim">Wypełnienie</span><div className="v">{fmt(one.est.infill / 1000, 1)} cm³</div></div>
+                <div><span className="mono dim">Podpory</span><div className="v">{fmt(one.est.support / 1000, 1)} cm³</div></div>
+                <div><span className="mono dim">Długość filamentu</span><div className="v">{fmt(one.meters, 2)} m</div></div>
+              </div>
+            )}
+
+            {Array.from(new Set(plan.plates.flatMap((p) => p.est.warnings))).map((w) => (
               <div key={w} className="alert warn">{w}</div>
             ))}
             <p className="mono dim slicer-note">
-              Szacunek bez slicowania — zwykle ±20–30% względem PrusaSlicera/OrcaSlicera{cs ? "; odpad przy zmianie koloru zależy też od pary kolorów" : ""}. Dokładną wycenę poda drukarz.
+              Szacunek bez slicowania — zwykle ±20–30% względem PrusaSlicera/OrcaSlicera{multi ? "; odpad przy zmianie koloru zależy też od pary kolorów" : ""}. Dokładną wycenę poda drukarz.
             </p>
           </>
         )}
@@ -346,12 +568,6 @@ export default function SlicerTool() {
         <div className="panel-head"><span className="mono">02 · Ustawienia druku</span></div>
         <div className="panel-body form">
           <div className="form-grid">
-            <div className="field">
-              <label htmlFor="material">Materiał</label>
-              <select className="select" id="material" value={settings.material} onChange={(e) => set("material", e.target.value as MaterialId)}>
-                {Object.entries(MATERIALS).map(([id, m]) => <option key={id} value={id}>{m.name}</option>)}
-              </select>
-            </div>
             <div className="field">
               <label htmlFor="quantity">Ilość (szt.)</label>
               <input className="input" id="quantity" type="number" min={1} max={1000} value={q}
@@ -369,6 +585,17 @@ export default function SlicerTool() {
                 {[1, 2, 3, 4, 5, 6].map((v) => <option key={v}>{v}</option>)}
               </select>
             </div>
+            {model && (
+              <div className="field">
+                <label htmlFor="unit">Jednostki pliku</label>
+                <select className="select" id="unit" value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
+                  <option value="mm">mm</option>
+                  <option value="cm">cm</option>
+                  <option value="m">m</option>
+                  <option value="in">cale</option>
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="field">
@@ -377,7 +604,7 @@ export default function SlicerTool() {
           </div>
 
           <div className="field">
-            <span className="label">Drukarka</span>
+            <span className="label">Prędkość drukarki</span>
             <div className="seg">
               {(Object.keys(PROFILES) as SpeedProfile[]).map((p) => (
                 <label key={p}>
@@ -407,17 +634,7 @@ export default function SlicerTool() {
             <span className="hint">Powierzchnie nachylone mniej niż {settings.supportAngle}° od poziomu dostaną podpory.</span>
           </div>
 
-          {model && (
-            <div className="field">
-              <label htmlFor="unit">Jednostki pliku</label>
-              <select className="select" id="unit" value={unit} onChange={(e) => setUnit(e.target.value as Unit)}>
-                <option value="mm">milimetry</option>
-                <option value="cm">centymetry</option>
-                <option value="m">metry</option>
-                <option value="in">cale</option>
-              </select>
-            </div>
-          )}
+          <p className="hint">Materiał i kolor ustawiasz dla każdego filamentu w sekcji „Filamenty i części”.</p>
 
           <Link href="/zapytania/nowe" className="btn btn-primary btn-lg">
             Zamów wydruk u drukarza

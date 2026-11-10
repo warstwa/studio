@@ -143,7 +143,6 @@ export function estimate(pos: Float32Array, s: PrintSettings): Estimate {
   const boxVol = size[0] * size[1] * size[2];
   if (volume < boxVol * 1e-4) warnings.push("Siatka wygląda na otwartą lub niespójną – objętość może być niepoprawna.");
   if (Math.max(...size) < 2) warnings.push("Model ma poniżej 2 mm – sprawdź jednostki pliku (może być w metrach lub calach).");
-  if (size[0] > 256 || size[1] > 256 || size[2] > 256) warnings.push("Model jest większy niż typowy stół 256 × 256 × 256 mm.");
 
   // Powłoki: obrysy na ścianach pionowych, warstwy górne/dolne na poziomych.
   const lineW = s.nozzle * 1.125;
@@ -178,14 +177,8 @@ export function estimate(pos: Float32Array, s: PrintSettings): Estimate {
   const filamentArea = Math.PI * (s.filamentDiameter / 2) ** 2;
   const meters = (modelVol + support) / filamentArea / 1000;
 
-  // Czas: objętość / przepływ, z narzutem na przyspieszenia i jałowe przejazdy.
-  const p = PROFILES[s.profile];
-  const flow = (speed: number) => Math.min(speed * lineW * s.layerHeight, p.maxFlow) * mat.speedFactor;
   const layers = Math.max(1, Math.ceil(size[2] / s.layerHeight));
-  let printTime = (shell / flow(p.perimeter) + infill / flow(p.infill) + support / flow(p.support)) * p.overhead;
-  printTime += layers * p.layerChange;
-  printTime = Math.max(printTime, layers * MIN_LAYER_TIME);
-  const seconds = p.startup + printTime;
+  const seconds = printSeconds(shell, infill, support, layers, s, mat.speedFactor);
 
   return {
     triangles: n,
@@ -204,6 +197,17 @@ export function estimate(pos: Float32Array, s: PrintSettings): Estimate {
     overhang,
     warnings,
   };
+}
+
+/** Czas: objętość / przepływ, z narzutem na przyspieszenia i jałowe przejazdy, plus nagrzewanie. */
+export function printSeconds(shell: number, infill: number, support: number, layers: number, s: PrintSettings, speedFactor: number) {
+  const p = PROFILES[s.profile];
+  const lineW = s.nozzle * 1.125;
+  const flow = (speed: number) => Math.min(speed * lineW * s.layerHeight, p.maxFlow) * speedFactor;
+  let t = (shell / flow(p.perimeter) + infill / flow(p.infill) + support / flow(p.support)) * p.overhead;
+  t += layers * p.layerChange;
+  t = Math.max(t, layers * MIN_LAYER_TIME);
+  return p.startup + t;
 }
 
 function markOverhangs(nz: Float32Array, n: number, angle: number, out: Uint8Array, pos: Float32Array, minZ: number, lh: number) {
@@ -350,8 +354,12 @@ export const MULTI_MODES: Record<MultiMode, { name: string; hint: string; waste:
 };
 
 export type ColorStats = {
-  /** Gramy na każdy filament (model; podpory doliczone do filamentu bazowego). */
+  /** Objętość modelu (mm³) na każdy filament – bez podpór. */
+  volumes: number[];
+  /** Gramy na każdy filament (model + podpory doliczone do filamentu dominującego). */
   grams: number[];
+  /** Filament dominujący – nim drukowane są podpory. */
+  main: number;
   changes: number;
   layersWithChanges: number;
   /** Warstwy z więcej niż jednym kolorem – w trybie ręcznym niewykonalne. */
@@ -377,6 +385,7 @@ export function colorStats(
   s: PrintSettings,
   mode: MultiMode,
   wastePerChange: number,
+  densities: number[] = new Array(filaments).fill(MATERIALS[s.material].density),
 ): ColorStats {
   const n = tri.length;
   const lineW = s.nozzle * 1.125;
@@ -423,16 +432,18 @@ export function colorStats(
   });
 
   // Podział gramów.
-  const mat = MATERIALS[s.material];
   const shellSum = shellW.reduce((a, b) => a + b, 0) || 1;
-  const grams = new Array(filaments).fill(0);
-  for (let f = 0; f < filaments; f++) grams[f] += ((base.shell * shellW[f]) / shellSum / 1000) * mat.density;
+  const volumes = new Array(filaments).fill(0);
+  for (let f = 0; f < filaments; f++) volumes[f] += (base.shell * shellW[f]) / shellSum;
   const volSum = objVol.reduce((a, v) => a + Math.abs(v), 0) || 1;
   objectBase.forEach((f, i) => {
-    if (f < filaments) grams[f] += ((base.infill * Math.abs(objVol[i])) / volSum / 1000) * mat.density;
+    if (f < filaments) volumes[f] += (base.infill * Math.abs(objVol[i])) / volSum;
   });
-  const main = grams.indexOf(Math.max(...grams));
-  grams[main] += base.supportGrams;
+  const main = volumes.indexOf(Math.max(...volumes));
+  const grams = volumes.map((v, f) => (v / 1000) * densities[f]);
+  grams[main] += (base.support / 1000) * densities[main];
+  const used = volumes.reduce((a, v) => a + v, 0) || 1;
+  const avgDensity = volumes.reduce((a, v, f) => a + v * densities[f], 0) / used;
 
   // Zmiany koloru.
   let changes = 0, layersWithChanges = 0, mixedLayers = 0, prev = -1;
@@ -457,10 +468,10 @@ export function colorStats(
     }
   }
   const m = MULTI_MODES[mode];
-  const towerGrams = ((layersWithChanges * m.tower) / 1000) * mat.density;
+  const towerGrams = ((layersWithChanges * m.tower) / 1000) * avgDensity;
   const wasteGrams = mode === "manual" ? 0 : changes * wastePerChange + towerGrams;
   const extraSeconds = changes * m.seconds + layersWithChanges * (m.tower > 0 ? 2 : 0);
-  return { grams, changes, layersWithChanges, mixedLayers, wasteGrams, extraSeconds };
+  return { volumes, grams, main, changes, layersWithChanges, mixedLayers, wasteGrams, extraSeconds };
 }
 
 /**

@@ -20,6 +20,9 @@ export type Model = {
   /** Grupa bazowa (wnętrze) każdej bryły. */
   objectBase: number[];
   groups: Group[];
+  /** Część każdego trójkąta – jednostka do rozmieszczania na stole i przypisania filamentu. */
+  item: Uint16Array;
+  items: { name: string }[];
 };
 
 export async function loadModel(file: File): Promise<Model> {
@@ -42,10 +45,13 @@ export function mergeModels(a: Model, b: Model): Model {
   group.set(a.group);
   const object = new Uint16Array(ta + tb);
   object.set(a.object);
-  const go = a.groups.length, oo = a.objectBase.length;
+  const item = new Uint16Array(ta + tb);
+  item.set(a.item);
+  const go = a.groups.length, oo = a.objectBase.length, io = a.items.length;
   for (let i = 0; i < tb; i++) {
     group[ta + i] = Math.min(255, b.group[i] + go);
     object[ta + i] = Math.min(65535, b.object[i] + oo);
+    item[ta + i] = Math.min(65535, b.item[i] + io);
   }
   const groups = [...a.groups, ...b.groups].map((g, i) =>
     // nowa część z domyślnym kolorem dostaje kolejny kolor z palety
@@ -58,12 +64,23 @@ export function mergeModels(a: Model, b: Model): Model {
     object,
     objectBase: [...a.objectBase, ...b.objectBase.map((g) => g + go)],
     groups,
+    item,
+    items: [...a.items, ...b.items],
   };
 }
 
 function single(label: string, positions: Float32Array): Model {
   const n = positions.length / 9;
-  return { name: label, positions, group: new Uint8Array(n), object: new Uint16Array(n), objectBase: [0], groups: [{ label, color: PALETTE[0] }] };
+  return {
+    name: label,
+    positions,
+    group: new Uint8Array(n),
+    object: new Uint16Array(n),
+    objectBase: [0],
+    groups: [{ label, color: PALETTE[0] }],
+    item: new Uint16Array(n),
+    items: [{ name: label }],
+  };
 }
 
 async function loadStl(buffer: ArrayBuffer) {
@@ -81,7 +98,8 @@ async function load3mf(buffer: ArrayBuffer, label: string): Promise<Model> {
   }
   const r = parse3mf(files, (xml) => new DOMParser().parseFromString(xml, "application/xml"));
   const groups = r.groups.map((g, i) => ({ label: g.label ?? (r.groups.length === 1 ? label : `Kolor ${i + 1}`), color: g.color ?? PALETTE[i % PALETTE.length] }));
-  return { name: label, positions: r.positions, group: r.group, object: r.object, objectBase: r.objectBase, groups };
+  const items = r.items.length === 1 ? [{ name: label }] : r.items;
+  return { name: label, positions: r.positions, group: r.group, object: r.object, objectBase: r.objectBase, groups, item: r.item, items };
 }
 
 type OcctMesh = { attributes: { position: { array: number[] } }; index?: { array: number[] }; color?: number[]; name?: string };
@@ -151,7 +169,9 @@ async function loadStep(buffer: ArrayBuffer, label: string): Promise<Model> {
     t += p.length / 9;
   });
   const groups = colorKeys.map((c, i) => ({ label: colorKeys.length === 1 ? label : `Kolor ${i + 1}`, color: c || PALETTE[i % PALETTE.length] }));
-  return { name: label, positions, group, object, objectBase: partGroup, groups };
+  // Każde ciało STEP to osobna część (złożenie z CAD można rozłożyć na stole).
+  const items = res.meshes.length === 1 ? [{ name: label }] : res.meshes.map((m, i) => ({ name: m.name?.trim() || `${label} · ${i + 1}` }));
+  return { name: label, positions, group, object, objectBase: partGroup, groups, item: Uint16Array.from(object), items };
 }
 
 function rgbHex(c: number[]) {
