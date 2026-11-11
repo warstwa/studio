@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { DEMO_IDS, currentUser } from "@/lib/auth";
+import { blobEnabled } from "@/lib/files";
 import SecurityPanel from "./SecurityPanel";
 import ProfileForm from "./ProfileForm";
 
@@ -28,7 +29,9 @@ export default async function ProfilePage({ searchParams }: { searchParams: Prom
           {me.maker && <Link href={`/drukarze/${me.id}`} className="btn">Podgląd profilu</Link>}
         </div>
         <ProfileForm
-          user={{ name: me.name, city: me.city, bio: me.bio, email: me.email, maker: me.maker ?? null }}
+          user={{ name: me.name, city: me.city, bio: me.bio, email: me.email, maker: me.maker ?? null, avatar: me.avatar, portfolio: me.portfolio }}
+          blob={blobEnabled()}
+          userId={me.id}
         />
         <div className="two-col" style={{ marginTop: 24 }}>
           <SecurityPanel isDemo={DEMO_IDS.includes(me.id)} />

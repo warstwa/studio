@@ -4,6 +4,7 @@ import { kv } from "./kv";
 import { hashPassword } from "./password";
 import { bestFit } from "./match";
 import type {
+  Review,
   Attachment,
   EventType,
   Offer,
@@ -29,6 +30,7 @@ async function ensureSeeded() {
   const db = kv();
   if (await db.setnx("seeded:v1", Date.now())) await seedV1();
   if (await db.setnx("seeded:v2", Date.now())) await seedV2();
+  if (await db.setnx("seeded:v3", Date.now())) await seedV3();
   gs.__warstwaSeeded = true;
 }
 
@@ -559,11 +561,12 @@ export async function reassignRequest(id: string, user: User, makerId: string) {
   return r;
 }
 
-export async function addComment(id: string, user: User, text: string) {
+export async function addComment(id: string, user: User, text: string, images: Attachment[] = []) {
   const r = await load(id);
   if (!(await canView(r, user.id))) throw new DomainError("Brak uprawnień.");
-  if (!text.trim()) throw new DomainError("Wiadomość jest pusta.");
+  if (!text.trim() && !images.length) throw new DomainError("Napisz wiadomość albo dodaj zdjęcie.");
   pushEvent(r, user.id, "comment", text.slice(0, 2000));
+  if (images.length) r.events[r.events.length - 1].images = images.slice(0, 8);
   await saveRequest(r);
 }
 
@@ -814,4 +817,113 @@ async function seedV2() {
   await offer("r_co2", "u_kuba", 145, 5, "PETG matowy od ręki. Wydrukuję jedną sztukę testową i podeślę zdjęcie dopasowania zatrzasków przed resztą.", now - 20 * 3600_000);
   await offer("r_co2", "u_marta", 128, 4, "Mogę wydrukować wszystkie 4 naraz na P1S. Wysyłka InPost w cenie.", now - 3 * 3600_000);
   await offer("r_meeple", "u_ania", 230, 12, "MMU3 — każdy kolor osobno, bez wieży czyszczącej. Pomogę też poprawić model pod druk 0.12 mm.", now - 30 * 3600_000);
+}
+
+/* ───────────────────────── opinie ───────────────────────── */
+
+const clamp5 = (n: number) => Math.max(1, Math.min(5, Math.round(n)));
+
+export async function getReview(requestId: string) {
+  return kv().get<Review>(`review:${requestId}`);
+}
+
+export async function listReviews(makerId: string) {
+  const ids = await kv().smembers(`reviews:${makerId}`);
+  const list = (await kv().mget<Review>(ids.map((i) => `review:${i}`))).filter(Boolean) as Review[];
+  return list.sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** Zamawiający ocenia zakończone zlecenie — raz. Ocena drukarza przelicza się jako średnia. */
+export async function submitReview(
+  requestId: string,
+  user: User,
+  input: { quality: number; communication: number; timeliness: number; text: string; photos: Attachment[] },
+) {
+  const r = await load(requestId);
+  if (r.parentId || r.clientId !== user.id) throw new DomainError("Ocenić może tylko zamawiający.");
+  assertStatus(r, "completed");
+  if (await getReview(requestId)) throw new DomainError("To zlecenie zostało już ocenione.");
+  const q = clamp5(input.quality), c = clamp5(input.communication), t = clamp5(input.timeliness);
+  const review: Review = {
+    id: `v_${uid(8)}`,
+    requestId,
+    makerId: r.makerId,
+    clientId: user.id,
+    quality: q,
+    communication: c,
+    timeliness: t,
+    rating: Math.round(((q + c + t) / 3) * 100) / 100,
+    text: input.text.trim().slice(0, 2000),
+    photos: input.photos.slice(0, 8),
+    title: r.title,
+    createdAt: Date.now(),
+  };
+  const won = await kv().setnx(`review:${requestId}`, review);
+  if (!won) throw new DomainError("To zlecenie zostało już ocenione.");
+  await kv().sadd(`reviews:${r.makerId}`, requestId);
+  const maker = await getUser(r.makerId);
+  if (maker?.maker) {
+    const n = maker.maker.ratingCount ?? (maker.maker.rating > 0 ? 1 : 0);
+    maker.maker.rating = Math.round(((maker.maker.rating * n + review.rating) / (n + 1)) * 100) / 100;
+    maker.maker.ratingCount = n + 1;
+    await saveUser(maker);
+  }
+  pushEvent(r, user.id, "reviewed", `${"★".repeat(Math.round(review.rating))} ${review.rating.toFixed(1)}${review.text ? ` — ${review.text.slice(0, 140)}` : ""}`);
+  await saveRequest(r);
+  return review;
+}
+
+/* ───────── zdjęcia demo: galerie drukarzy, okładki zleceń, przykładowe opinie ───────── */
+
+function demoImg(name: string, size = 30000): Attachment {
+  return { name: `${name}.webp`, url: `/demo/${name}.webp`, size, kind: "image" };
+}
+
+async function seedV3() {
+  const portfolio: Record<string, string[]> = {
+    u_kuba: ["gears-black", "bracket-cf", "enclosure-white", "gears-orange"],
+    u_ola: ["chess-resin", "knot-resin"],
+    u_tomek: ["lamp-white", "vase-graphite", "planter-sage", "pawns-multi"],
+    u_marta: ["bins-black", "bins-blue", "enclosure-white"],
+    u_piotr: ["bracket-asa", "bracket-cf", "gears-black"],
+    u_ania: ["pawns-multi", "vase-gold", "planter-terracotta"],
+  };
+  const ratingCount: Record<string, number> = { u_kuba: 128, u_ola: 81, u_tomek: 190, u_marta: 104, u_piotr: 47, u_ania: 33 };
+  for (const [id, imgs] of Object.entries(portfolio)) {
+    const u = await getUser(id);
+    if (!u?.maker) continue;
+    u.portfolio = imgs.map((n) => demoImg(n));
+    u.maker.ratingCount = ratingCount[id];
+    await saveUser(u);
+  }
+  // okładki przykładowych zleceń na giełdzie
+  const covers: Record<string, string> = { r_co2: "enclosure-white", r_lamp: "lamp-white", r_meeple: "pawns-multi" };
+  for (const [id, n] of Object.entries(covers)) {
+    const r = await getRequest(id);
+    if (r && !(r.files ?? []).some((f) => f.kind === "image")) {
+      r.files = [demoImg(n), ...(r.files ?? [])];
+      await kv().set(`req:${r.id}`, r);
+    }
+  }
+  // przykładowe opinie (historyczne zlecenia)
+  const now = Date.now();
+  const rv = (makerId: string, clientId: string, title: string, q: number, c: number, t: number, text: string, photos: string[], daysAgo: number) => {
+    const requestId = `r_hist_${makerId}_${daysAgo}`;
+    return { id: `v_${requestId}`, requestId, makerId, clientId, quality: q, communication: c, timeliness: t,
+      rating: Math.round(((q + c + t) / 3) * 100) / 100, text, photos: photos.map((n) => demoImg(n)), title, createdAt: now - daysAgo * DAY } satisfies Review;
+  };
+  const reviews: Review[] = [
+    rv("u_kuba", "u_jan", "Zębatki do przekładni ekstrudera", 5, 5, 5, "Pasowanie idealne, otwory pod wałek bez rozwiercania. Kuba wysłał zdjęcie próbki przed drukiem całej serii.", ["gears-black"], 12),
+    rv("u_kuba", "u_ania", "Kątowniki montażowe PA-CF", 5, 4, 5, "Sztywne i lekkie, dokładnie jak w CAD. Polecam do części mechanicznych.", ["bracket-cf"], 40),
+    rv("u_tomek", "u_jan", "Klosz lampy 30 cm", 5, 5, 4, "Bez widocznego szwu, światło rozprasza się równo. Druk dzień później niż planowo, ale Tomek uprzedził.", ["lamp-white"], 9),
+    rv("u_tomek", "u_ania", "Pionki do gry — 4 kolory", 5, 5, 5, "Kolory czyste, zero zabrudzeń między warstwami.", ["pawns-multi"], 26),
+    rv("u_marta", "u_jan", "Organizery Gridfinity — 36 szt.", 5, 5, 5, "Cała seria wymiarowo identyczna, wszystko pasuje do siatki. Wysyłka następnego dnia.", ["bins-black", "bins-blue"], 6),
+    rv("u_ola", "u_jan", "Figury szachowe — żywica", 5, 5, 4, "Detal świetny, po podporach praktycznie nie ma śladu. Gotowe do malowania.", ["chess-resin"], 18),
+    rv("u_ania", "u_jan", "Wazon PLA Silk — złoty", 4, 5, 5, "Piękny połysk. Lekko widoczna linia warstw u góry, ale ogólnie bardzo dobrze.", ["vase-gold"], 33),
+    rv("u_piotr", "u_jan", "Uchwyt z ASA do samochodu", 5, 4, 4, "Wytrzymał upały w aucie bez deformacji.", ["bracket-asa"], 60),
+  ];
+  for (const r of reviews) {
+    await kv().set(`review:${r.requestId}`, r);
+    await kv().sadd(`reviews:${r.makerId}`, r.requestId);
+  }
 }

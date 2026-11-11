@@ -8,10 +8,10 @@ export function StatusPill({ status }: { status: RequestStatus }) {
   return <span className={`pill ${s.tone}`}>{s.label}</span>;
 }
 
-export function Avatar({ name, size }: { name: string; size?: "sm" | "lg" }) {
+export function Avatar({ name, size, src }: { name: string; size?: "sm" | "lg"; src?: string }) {
   return (
     <span className={`avatar${size ? " " + size : ""}`} aria-hidden>
-      {initials(name)}
+      {src ? <img src={src} alt="" loading="lazy" /> : initials(name)}
     </span>
   );
 }
@@ -21,8 +21,16 @@ export function MakerCard({ u }: { u: PublicUser }) {
   return (
     <Spotlight className="maker-card">
       <Link href={`/drukarze/${u.id}`} className="card-link" aria-label={`Profil: ${u.name}`} />
+      <div className={`maker-cover${u.portfolio?.length ? "" : " empty"}`}>
+        {u.portfolio?.length ? (
+          <img src={u.portfolio[0].url} alt={`Realizacja: ${u.name}`} loading="lazy" />
+        ) : (
+          <span className="mono dim">Brak zdjęć realizacji</span>
+        )}
+        {(u.portfolio?.length ?? 0) > 1 && <span className="cover-count mono">+{u.portfolio!.length - 1} zdjęć</span>}
+      </div>
       <div className="maker-top">
-        <Avatar name={u.name} />
+        <Avatar name={u.name} src={u.avatar} />
         <div>
           <h3>{u.name}</h3>
           <div className="mono dim">{u.city}</div>
@@ -50,7 +58,7 @@ export function MakerCard({ u }: { u: PublicUser }) {
         <div className="spec-row">
           <span>Zlecenia</span>
           <span>
-            {m.jobsDone} {m.rating > 0 && <>· ★ {m.rating.toFixed(2)}</>}
+            {m.jobsDone} {m.rating > 0 && <>· ★ {m.rating.toFixed(2)}{m.ratingCount ? <span className="dim"> ({m.ratingCount})</span> : null}</>}
           </span>
         </div>
       </div>

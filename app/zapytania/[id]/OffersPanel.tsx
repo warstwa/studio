@@ -61,7 +61,7 @@ export default function OffersPanel({
               return (
                 <div key={o.id} className="offer" style={{ ["--i" as string]: i }}>
                   <div className="offer-who">
-                    {u && <Avatar name={u.name} />}
+                    {u && <Avatar name={u.name} src={u.avatar} />}
                     <div style={{ minWidth: 0 }}>
                       <Link href={`/drukarze/${o.makerId}`} className="offer-name">{u?.name ?? "Drukarz"}</Link>
                       <div className="dim offer-sub">

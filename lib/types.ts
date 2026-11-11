@@ -9,6 +9,7 @@ export interface MakerProfile {
   leadDays: number; // typowy czas realizacji
   available: boolean;
   rating: number; // 0–5
+  ratingCount?: number; // liczba ocen składających się na rating
   jobsDone: number;
 }
 
@@ -22,6 +23,8 @@ export interface User {
   bio: string;
   createdAt: number;
   maker?: MakerProfile;
+  avatar?: string; // URL zdjęcia profilowego
+  portfolio?: Attachment[]; // galeria realizacji (zdjęcia)
 }
 
 export type PublicUser = Omit<User, "passHash" | "email">;
@@ -40,6 +43,7 @@ export type RequestStatus =
 
 export type EventType =
   | "published"
+  | "reviewed"
   | "offer"
   | "offer_accepted"
   | "created"
@@ -62,6 +66,7 @@ export interface RequestEvent {
   type: EventType;
   note?: string;
   refId?: string; // powiązane zapytanie (np. prośba o pomoc)
+  images?: Attachment[]; // zdjęcia w wiadomości
 }
 
 export interface PrintRequest {
@@ -150,4 +155,20 @@ export interface Offer {
   status: "pending" | "accepted" | "declined" | "withdrawn";
   createdAt: number;
   updatedAt: number;
+}
+
+/** Ocena zrealizowanego zlecenia — wystawia zamawiający po odbiorze. */
+export interface Review {
+  id: string;
+  requestId: string;
+  makerId: string;
+  clientId: string;
+  quality: number; // 1–5 jakość wydruku
+  communication: number; // 1–5 kontakt
+  timeliness: number; // 1–5 terminowość
+  rating: number; // średnia
+  text: string;
+  photos: Attachment[];
+  title: string; // tytuł zlecenia (do wyświetlenia na profilu)
+  createdAt: number;
 }

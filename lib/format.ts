@@ -15,6 +15,7 @@ export const STATUS: Record<RequestStatus, { label: string; tone: "wait" | "go" 
 
 export const EVENT_LABEL: Record<EventType, string> = {
   published: "opublikował(a) zlecenie",
+  reviewed: "ocenił(a) wydruk",
   offer: "złożył(a) ofertę",
   offer_accepted: "przyjął/przyjęła ofertę",
   created: "utworzył(a) zapytanie",

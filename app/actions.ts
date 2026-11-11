@@ -19,7 +19,7 @@ import {
 import { burnTime, needsRehash, passwordProblem } from "@/lib/password";
 import * as D from "@/lib/data";
 import { MATERIALS, type Attachment, type SlicerSummary } from "@/lib/types";
-import { parseAttachments } from "@/lib/files";
+import { parseAttachments, parseImages } from "@/lib/files";
 
 export type FormState = { error?: string; ok?: string } | undefined;
 
@@ -148,6 +148,8 @@ export async function saveProfileAction(_: FormState, f: FormData): Promise<Form
   u.name = str(f, "name", 60) || u.name;
   u.city = str(f, "city", 60);
   u.bio = str(f, "bio", 600);
+  if (f.has("avatar")) u.avatar = parseImages(f.get("avatar"), 1)[0]?.url;
+  if (f.has("portfolio")) u.portfolio = parseImages(f.get("portfolio"), 12);
   const becomeMaker = f.get("isMaker") === "on";
   if (becomeMaker) {
     const prev = u.maker;
@@ -161,6 +163,7 @@ export async function saveProfileAction(_: FormState, f: FormData): Promise<Form
       leadDays: Math.round(num(f, "leadDays") ?? 3),
       available: f.get("available") === "on",
       rating: prev?.rating ?? 0,
+      ratingCount: prev?.ratingCount,
       jobsDone: prev?.jobsDone ?? 0,
     };
   } else {
@@ -263,7 +266,28 @@ export async function reassignAction(_: FormState, f: FormData): Promise<FormSta
 export async function commentAction(_: FormState, f: FormData): Promise<FormState> {
   const id = str(f, "id");
   const u = await requireUser(`/zapytania/${id}`);
-  return run(id, () => D.addComment(id, u, str(f, "text", 2000)));
+  return run(id, () => D.addComment(id, u, str(f, "text", 2000), parseImages(f.get("images"), 8)));
+}
+
+export async function reviewAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zapytania/${id}`);
+  const stars = (k: string) => Number(f.get(k)) || 0;
+  if (!stars("quality") || !stars("communication") || !stars("timeliness")) return { error: "Zaznacz gwiazdki we wszystkich trzech kategoriach." };
+  const res = await run(id, () =>
+    D.submitReview(id, u, {
+      quality: stars("quality"),
+      communication: stars("communication"),
+      timeliness: stars("timeliness"),
+      text: str(f, "text", 2000),
+      photos: parseImages(f.get("photos"), 8),
+    }),
+  );
+  if (res?.ok) {
+    const r = await D.getRequest(id);
+    if (r?.makerId) revalidatePath(`/drukarze/${r.makerId}`);
+  }
+  return res;
 }
 
 /* ───────── zamówienia: szkic → giełda → oferty ───────── */

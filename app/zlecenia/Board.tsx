@@ -19,6 +19,9 @@ export interface BoardItem {
   source?: string;
   files: number;
   models: number;
+  cover?: string;
+  photos: number;
+  swatches: string[];
   slicer: { seconds: number; grams: number; colors: number } | null;
   offers: number;
   createdAt: number;
@@ -94,6 +97,18 @@ export default function Board({ items, isMaker }: { items: BoardItem[]; isMaker:
         <div className="board" key={`${mat}-${forMe}-${noOffer}-${sort}`}>
           {list.map((i, n) => (
             <Link key={i.id} href={`/zapytania/${i.id}`} className={`order-card${i.invited ? " invited" : ""}`} style={{ ["--i" as string]: n }}>
+              <div className={`order-cover${i.cover ? "" : " empty"}`}>
+                {i.cover ? (
+                  <img src={i.cover} alt="" loading="lazy" />
+                ) : i.swatches.length ? (
+                  <div className="swatches">{i.swatches.slice(0, 6).map((c, k) => <i key={k} style={{ background: c }} />)}</div>
+                ) : (
+                  <svg width="44" height="44" viewBox="0 0 40 40" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden>
+                    {i.source === "idea" ? <><path d="M20 5a10 10 0 0 0-6 18v5h12v-5a10 10 0 0 0-6-18z" /><path d="M15 33h10" /></> : <path d="M6 30l14 7 14-7M6 24l14 7 14-7M6 18l14 7 14-7-14-7z" />}
+                  </svg>
+                )}
+                {i.photos > 1 && <span className="cover-count mono">+{i.photos - 1} zdjęć</span>}
+              </div>
               <div className="order-top">
                 <span className="mono dim">{i.code} · {SOURCE[i.source ?? "file"]}</span>
                 {i.own ? <span className="tag-help">Twoje</span> : i.invited ? <span className="tag-fit">Polecane dla Ciebie</span> : null}

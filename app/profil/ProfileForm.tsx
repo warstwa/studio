@@ -2,22 +2,32 @@
 import { useActionState, useState } from "react";
 import { saveProfileAction } from "@/app/actions";
 import Submit from "@/components/Submit";
-import { MATERIALS, type MakerProfile } from "@/lib/types";
+import ImageAttach from "@/components/ImageAttach";
+import { MATERIALS, type Attachment, type MakerProfile } from "@/lib/types";
 
 export default function ProfileForm({
   user,
+  blob,
+  userId,
 }: {
-  user: { name: string; city: string; bio: string; email: string; maker: MakerProfile | null };
+  user: { name: string; city: string; bio: string; email: string; maker: MakerProfile | null; avatar?: string; portfolio?: Attachment[] };
+  blob: boolean;
+  userId: string;
 }) {
   const [state, action] = useActionState(saveProfileAction, undefined);
   const [isMaker, setIsMaker] = useState(!!user.maker);
   const m = user.maker;
   return (
-    <form action={action} className="two-col">
+    <form action={action} className="two-col" key={JSON.stringify(user)}>
       <div className="stack">
         <div className="panel">
           <div className="panel-head"><span className="mono">Dane podstawowe</span><span className="mono dim">{user.email}</span></div>
           <div className="panel-body form">
+            <div className="field">
+              <span className="label">Zdjęcie profilowe</span>
+              <ImageAttach name="avatar" variant="avatar" max={1} blob={blob} userId={userId} label="Dodaj zdjęcie"
+                initial={user.avatar ? [{ name: "avatar", url: user.avatar, size: 0, kind: "image" }] : []} />
+            </div>
             <div className="form-grid">
               <div className="field">
                 <label htmlFor="name">Imię i nazwisko</label>
@@ -47,6 +57,11 @@ export default function ProfileForm({
                 <div className="field">
                   <label htmlFor="headline">Nagłówek</label>
                   <input className="input" id="headline" name="headline" defaultValue={m?.headline} placeholder="np. Części techniczne z materiałów inżynieryjnych" />
+                </div>
+                <div className="field">
+                  <span className="label">Zdjęcia realizacji (max 12)</span>
+                  <ImageAttach name="portfolio" blob={blob} userId={userId} max={12} initial={user.portfolio ?? []} label="Dodaj zdjęcia wydruków" />
+                  <span className="hint">Pierwsze zdjęcie będzie okładką Twojej karty w katalogu drukarzy.</span>
                 </div>
                 <div className="field">
                   <label htmlFor="printers">Drukarki (każda w nowej linii)</label>

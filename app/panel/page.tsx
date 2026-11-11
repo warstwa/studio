@@ -172,7 +172,7 @@ function Row({ r, me, people, i, offers, myOffer }: { r: PrintRequest; me: User;
           </span>
         ) : (
           <>
-            {other && <Avatar name={other.name} size="sm" />}
+            {other && <Avatar name={other.name} size="sm" src={other.avatar} />}
             <span>
               <span className="dim">{role}</span> {other?.name.split(" ")[0] ?? "—"}
             </span>

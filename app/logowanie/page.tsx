@@ -37,7 +37,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               <form action={demoLoginAction} key={u.id}>
                 <input type="hidden" name="id" value={u.id} />
                 <button className="demo-btn" type="submit">
-                  <Avatar name={u.name} size="sm" />
+                  <Avatar name={u.name} size="sm" src={u.avatar} />
                   <span>{u.name}</span>
                   <small>{u.role === "maker" ? "Drukarz" : "Zamawiający"}</small>
                 </button>

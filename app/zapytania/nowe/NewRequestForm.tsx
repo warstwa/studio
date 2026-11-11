@@ -110,7 +110,7 @@ export default function NewRequestForm({ makers, initialMaker }: { makers: Publi
           {maker && (
             <div key={maker.id} style={{ animation: "rowIn .4s var(--ease)" }}>
               <div className="row" style={{ marginBottom: 14 }}>
-                <Avatar name={maker.name} />
+                <Avatar name={maker.name} src={maker.avatar} />
                 <div>
                   <div>{maker.maker!.headline}</div>
                   <div className="mono dim">~{maker.maker!.leadDays} dni · {maker.maker!.hourlyRate} zł/h</div>

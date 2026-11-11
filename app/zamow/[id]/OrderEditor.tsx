@@ -37,7 +37,8 @@ export default function OrderEditor({ r, blob, userId }: { r: PrintRequest; blob
                 placeholder="Do czego służy wydruk, wymagane tolerancje, wykończenie, czy części mają do siebie pasować…" />
             </div>
             <div className="field">
-              <span className="label">Pliki</span>
+              <span className="label">Pliki i zdjęcia</span>
+              <span className="hint">Modele, rysunki, zdjęcia albo wizualizacje — pierwsze zdjęcie będzie okładką zlecenia na giełdzie.</span>
               <FileDrop blob={blob} userId={userId} initial={r.files ?? []} onBusy={setBusy} />
             </div>
           </div>

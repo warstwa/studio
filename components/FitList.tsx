@@ -30,7 +30,7 @@ export default function FitList({
           if (!u) return null;
           return (
             <Link key={f.makerId} href={`/drukarze/${u.id}`} className="fit-row" style={{ ["--i" as string]: i, ["--s" as string]: `${f.score}%` }}>
-              <Avatar name={u.name} size="sm" />
+              <Avatar name={u.name} size="sm" src={u.avatar} />
               <div className="fit-main">
                 <div className="row" style={{ gap: 8, flexWrap: "nowrap" }}>
                   <b className="ellipsis">{u.name}</b>

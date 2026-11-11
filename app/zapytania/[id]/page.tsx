@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
-import { canView, getRequest, getTree, listMakers, listOffers, toPublic, userMap } from "@/lib/data";
+import { canView, getRequest, getReview, getTree, listMakers, listOffers, toPublic, userMap } from "@/lib/data";
 import { EVENT_LABEL, STATUS, ago, date, zl } from "@/lib/format";
 import type { PrintRequest, PublicUser, RequestEvent } from "@/lib/types";
 import { Avatar, StatusPill } from "@/components/ui";
@@ -12,6 +12,10 @@ import SlicerCard from "@/components/SlicerCard";
 import FilesPanel from "@/components/FilesPanel";
 import { bestFit } from "@/lib/match";
 import CommentForm from "./CommentForm";
+import ReviewForm from "./ReviewForm";
+import ReviewCard from "@/components/ReviewCard";
+import Gallery from "@/components/Gallery";
+import { blobEnabled } from "@/lib/files";
 
 export const dynamic = "force-dynamic";
 
@@ -78,6 +82,9 @@ export default async function RequestPage({
   const fitById = Object.fromEntries(fits.map((f) => [f.makerId, f]));
   const offerPeople = isOpen ? await userMap(offers.map((o) => o.makerId)) : {};
   // oferty konkurencji są niejawne — drukarz widzi w historii tylko swoją
+  const review = r.status === "completed" && !r.parentId ? await getReview(r.id) : null;
+  const canReview = r.status === "completed" && !r.parentId && r.clientId === me.id && !review;
+  const blob = blobEnabled();
   const events = r.events.filter((e) => e.type !== "offer" || owner === me.id || e.actorId === me.id);
 
   return (
@@ -155,7 +162,20 @@ export default async function RequestPage({
             </div>
 
             {r.slicer && <SlicerCard s={r.slicer} />}
-            {r.files && r.files.length > 0 && <FilesPanel files={r.files} />}
+            {canReview && <ReviewForm id={r.id} makerName={people[r.makerId]?.name ?? "drukarz"} blob={blob} userId={me.id} />}
+            {review && (
+              <div className="panel">
+                <div className="panel-head"><span className="mono">Ocena zamawiającego</span></div>
+                <div className="panel-body"><ReviewCard r={review} author={people[review.clientId]} /></div>
+              </div>
+            )}
+            {r.files && r.files.some((f) => f.kind === "image") && (
+              <div className="panel">
+                <div className="panel-head"><span className="mono">Zdjęcia</span><span className="mono dim">{r.files.filter((f) => f.kind === "image").length}</span></div>
+                <div className="panel-body"><Gallery images={r.files.filter((f) => f.kind === "image")} alt={r.title} /></div>
+              </div>
+            )}
+            {r.files && r.files.some((f) => f.kind !== "image") && <FilesPanel files={r.files.filter((f) => f.kind !== "image")} />}
 
             <div className="panel">
               <div className="panel-head">
@@ -200,7 +220,7 @@ export default async function RequestPage({
                     <Event key={e.id} e={e} people={people} tree={tree} i={i} />
                   ))}
                 </ol>
-                <CommentForm id={r.id} />
+                <CommentForm id={r.id} blob={blob} userId={me.id} />
               </div>
             </div>
           </div>
@@ -261,7 +281,7 @@ function Person({ label, u }: { label: string; u?: PublicUser }) {
   if (!u) return null;
   const inner = (
     <>
-      <Avatar name={u.name} size="sm" />
+      <Avatar name={u.name} size="sm" src={u.avatar} />
       <span style={{ flex: 1 }}>{u.name}</span>
       <span className="mono dim">{label}</span>
     </>
@@ -292,6 +312,7 @@ function Event({ e, people, tree, i }: { e: RequestEvent; people: Record<string,
           <time dateTime={new Date(e.at).toISOString()}>{ago(e.at)}</time>
         </div>
         {e.note && <div className="note">{e.note}</div>}
+        {e.images && e.images.length > 0 && <Gallery images={e.images} variant="strip" />}
       </div>
     </li>
   );

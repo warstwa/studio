@@ -24,7 +24,8 @@ export function kindOf(name: string): Attachment["kind"] {
 function trustedUrl(url: string) {
   try {
     const u = new URL(url, "http://local");
-    if (u.origin === "http://local") return u.pathname.startsWith("/api/files/") && !blobEnabled();
+    if (u.origin === "http://local")
+      return (u.pathname.startsWith("/api/files/") && !blobEnabled()) || /^\/demo\/[\w-]+\.webp$/.test(u.pathname);
     return u.protocol === "https:" && u.hostname.endsWith(".public.blob.vercel-storage.com");
   } catch {
     return false;
@@ -44,4 +45,9 @@ export function parseAttachments(raw: unknown): Attachment[] {
     .filter((a) => trustedUrl(a.url) && ALLOWED_EXT.includes(extOf(a.name)))
     .slice(0, 12)
     .map((a) => ({ name: a.name.slice(0, 160), url: a.url, size: Math.max(0, Number(a.size) || 0), kind: kindOf(a.name) }));
+}
+
+/** Tylko zdjęcia (avatar, galeria, zdjęcia w czacie i opiniach). */
+export function parseImages(raw: unknown, max = 12): Attachment[] {
+  return parseAttachments(raw).filter((a) => a.kind === "image").slice(0, max);
 }
