@@ -38,13 +38,13 @@ export default async function Home() {
             />
             <Reveal delay={4}>
               <p className="hero-lead">
-                Wyślij model do drukarza w swojej okolicy. Przyjmie zlecenie, odrzuci je — albo zaprosi
-                innego drukarza, żeby wydrukować je razem i zdążyć na czas.
+                Wgraj model albo opisz pomysł. Dopasujemy drukarzy, którzy pasują najlepiej — przyślą oferty z ceną
+                i terminem, a Ty wybierasz. Za duża seria? Drukarze zaproszą kolejnych do pomocy.
               </p>
             </Reveal>
             <Reveal delay={5} className="hero-cta">
-              <Link href="/drukarze" className="btn btn-primary btn-lg">
-                Znajdź drukarza <Arrow />
+              <Link href="/zamow" className="btn btn-primary btn-lg">
+                Złóż zamówienie <Arrow />
               </Link>
               <Link href="/rejestracja?rola=drukarz" className="btn btn-lg">
                 Mam drukarkę
@@ -86,11 +86,11 @@ export default async function Home() {
           <div className="section-head">
             <div className="section-num mono"><b>01</b> / Przepływ zlecenia</div>
             <div>
-              <SplitHeading lines={["Jedno zapytanie.", "Trzy możliwe odpowiedzi."]} />
+              <SplitHeading lines={["Jedno zlecenie.", "Najlepsi drukarze odpowiadają."]} />
               <Reveal delay={2}>
                 <p>
-                  Każde zapytanie kończy się konkretną decyzją. Gdy drukarz nie da rady sam, nie odsyła Cię z
-                  niczym — przekazuje część pracy komuś z sieci, a Ty widzisz to w historii zlecenia.
+                  Nie szukasz drukarza na własną rękę. Zlecenie trafia na giełdę, najlepiej dopasowani dostają
+                  zaproszenie, a Ty porównujesz oferty. Gdy drukarz nie da rady sam, przekazuje część pracy komuś z sieci.
                 </p>
               </Reveal>
             </div>
@@ -139,13 +139,13 @@ export default async function Home() {
           <div className="feat-grid">
             {[
               {
-                t: "Skrzynka zapytań",
-                d: "Wszystkie zapytania w jednym miejscu, ze specyfikacją, plikiem i terminem.",
+                t: "Giełda zleceń",
+                d: "Zlecenia dopasowane do Twoich maszyn i materiałów — z plikami i wyliczeniem z kalkulatora.",
                 i: <path d="M3 8l11 7 11-7M3 8v14h22V8L14 3z" />,
               },
               {
-                t: "Wycena przy akceptacji",
-                d: "Akceptując, podajesz cenę i termin. Klient od razu wie, na czym stoi.",
+                t: "Oferta w minutę",
+                d: "Cena, termin i krótka notatka. Klient porównuje oferty i wybiera — bez licytowania w wiadomościach.",
                 i: <path d="M4 14l6 6L24 6" />,
               },
               {

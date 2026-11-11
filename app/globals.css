@@ -2404,3 +2404,445 @@ input[type="date"] {
     border-top: 1px solid var(--line);
   }
 }
+
+/* ───── zamówienie: start ───── */
+.paths {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+@media (max-width: 860px) {
+  .paths {
+    grid-template-columns: 1fr;
+  }
+}
+.path-card {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 24px;
+  min-height: 210px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg-2);
+  transition: border-color 0.25s, background 0.25s, transform 0.25s var(--ease);
+}
+.path-card:hover {
+  border-color: var(--dim);
+  transform: translateY(-2px);
+}
+.path-card:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+.path-card.on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--bg-2));
+}
+.path-card svg {
+  color: var(--accent);
+}
+.path-card b {
+  font-family: var(--display);
+  font-size: 20px;
+  font-weight: 600;
+}
+.path-card > span:not(.path-n) {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+}
+.path-card .path-n {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  color: var(--dim);
+}
+.path-card .path-go {
+  color: var(--accent) !important;
+  font-weight: 600;
+  margin-top: auto;
+}
+
+/* ───── załączniki ───── */
+.filedrop-wrap {
+  display: grid;
+  gap: 10px;
+}
+.filedrop {
+  all: unset;
+  box-sizing: border-box;
+  cursor: pointer;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 28px 16px;
+  border: 1px dashed var(--line-2);
+  border-radius: 6px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+  transition: border-color 0.2s, background 0.2s;
+}
+.filedrop b {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.filedrop svg {
+  color: var(--accent);
+}
+.filedrop:hover,
+.filedrop.drag {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.filedrop:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.file-list li {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  font-size: 14px;
+  overflow: hidden;
+  animation: rowIn 0.4s var(--ease) both;
+}
+.file-list a:hover {
+  color: var(--accent);
+}
+.file-kind {
+  min-width: 44px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font: 700 11px var(--label);
+  text-transform: uppercase;
+  text-align: center;
+}
+.file-kind.model {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+.file-kind.image {
+  background: color-mix(in srgb, var(--help) 16%, transparent);
+  color: var(--help);
+}
+.file-progress {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+/* ───── dopasowanie (best fit) ───── */
+.fit-list {
+  display: grid;
+  gap: 8px;
+}
+.fit-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  transition: border-color 0.2s, background 0.2s;
+  animation: rowIn 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+.fit-row:hover {
+  border-color: var(--line-2);
+  background: var(--surface);
+}
+.fit-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.fit-main b {
+  font-weight: 600;
+}
+.fit-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line-2);
+  overflow: hidden;
+}
+.fit-bar i {
+  display: block;
+  height: 100%;
+  width: var(--s);
+  background: var(--accent);
+  transform-origin: left;
+  animation: grow 0.9s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 70ms + 150ms);
+}
+@keyframes grow {
+  from {
+    transform: scaleX(0);
+  }
+}
+.fit-why {
+  font-size: 13px;
+  color: var(--muted);
+}
+.fit-warn {
+  color: var(--wait);
+  font-size: 13px;
+}
+.fit-score {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.tag-fit {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font: 700 11px var(--label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ───── giełda zleceń ───── */
+.filters .sort {
+  width: auto;
+  height: 36px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+.board {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 12px;
+}
+@media (max-width: 420px) {
+  .board {
+    grid-template-columns: 1fr;
+  }
+}
+.order-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-2);
+  transition: border-color 0.25s, transform 0.25s var(--ease), background 0.25s;
+  animation: rowIn 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 50ms);
+}
+.order-card:hover {
+  border-color: var(--line-2);
+  transform: translateY(-2px);
+  background: var(--surface);
+}
+.order-card.invited {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.order-card h3 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.order-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.order-top .fit-score {
+  margin-left: auto;
+}
+.order-desc {
+  color: var(--muted);
+  font-size: 14px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.order-card .spec {
+  margin-top: auto;
+}
+.order-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding-top: 4px;
+}
+.chip-color {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chip-color i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+}
+
+/* ───── oferty ───── */
+.offers {
+  display: grid;
+  gap: 10px;
+}
+.offer {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  animation: rowIn 0.5s var(--ease) both;
+  animation-delay: calc(var(--i, 0) * 60ms);
+}
+.offer-who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.offer-who .fit-score {
+  margin-left: auto;
+}
+.offer-name {
+  font-weight: 600;
+}
+.offer-name:hover {
+  color: var(--accent);
+}
+.offer-sub {
+  font-size: 13px;
+}
+.offer-nums,
+.offer-mine {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.offer-nums > div,
+.offer-mine > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+.offer-nums .mono,
+.offer-mine .mono {
+  width: 100%;
+}
+.offer-nums b,
+.offer-mine b {
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.offer-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--line-2);
+  color: #d6d4ce;
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+.offers-empty {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.offers-empty .pulse {
+  margin-top: 7px;
+  flex: none;
+}
+.offers-empty p {
+  margin-top: 4px;
+  font-size: 14px;
+}
+.seg-mini {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+}
+.seg-mini button {
+  all: unset;
+  cursor: pointer;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.seg-mini button[aria-pressed="true"] {
+  background: var(--text);
+  color: var(--bg);
+}
+
+/* ───── edytor zamówienia / slicer ───── */
+.order-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.slicer-card .stat-strip {
+  margin-bottom: 14px;
+}
+.slicer-meta {
+  display: grid;
+  gap: 10px;
+  font-size: 13px;
+}
+.order-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 100;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  font-size: 14px;
+}
+@media (max-width: 560px) {
+  .hide-xs {
+    display: none;
+  }
+}

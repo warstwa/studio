@@ -2,8 +2,12 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { kv } from "./kv";
 import { hashPassword } from "./password";
+import { bestFit } from "./match";
 import type {
+  Attachment,
   EventType,
+  Offer,
+  SlicerSummary,
   MakerProfile,
   PrintRequest,
   PublicUser,
@@ -18,13 +22,18 @@ export class DomainError extends Error {}
 /* ───────────────────────── seed ───────────────────────── */
 
 const DAY = 86_400_000;
-const SEED_VERSION = "v1";
+const gs = globalThis as unknown as { __warstwaSeeded?: boolean };
 
 async function ensureSeeded() {
+  if (gs.__warstwaSeeded) return;
   const db = kv();
-  const won = await db.setnx(`seeded:${SEED_VERSION}`, Date.now());
-  if (!won) return;
+  if (await db.setnx("seeded:v1", Date.now())) await seedV1();
+  if (await db.setnx("seeded:v2", Date.now())) await seedV2();
+  gs.__warstwaSeeded = true;
+}
 
+async function seedV1() {
+  const db = kv();
   const pw = hashPassword("demo1234");
   const now = Date.now();
   const mk = (
@@ -278,6 +287,8 @@ export async function listRequests() {
 }
 
 export async function canView(r: PrintRequest, userId: string) {
+  if (r.status === "draft") return r.clientId === userId;
+  if (r.status === "open" && r.clientId !== userId) return !!(await getUser(userId))?.maker;
   if (r.clientId === userId || r.makerId === userId || r.requestedById === userId) return true;
   const root = r.rootId === r.id ? r : await getRequest(r.rootId);
   return !!root?.participants.includes(userId);
@@ -508,7 +519,10 @@ export async function cancelRequest(id: string, user: User) {
   const r = await load(id);
   const owner = r.parentId ? r.requestedById : r.clientId;
   if (owner !== user.id) throw new DomainError("Brak uprawnień.");
-  assertStatus(r, "pending", "help_requested", "rejected");
+  assertStatus(r, "pending", "help_requested", "rejected", "draft", "open");
+  if (r.status === "open")
+    for (const o of await listOffers(r.id))
+      if (o.status === "pending") await saveOffer({ ...o, status: "declined" });
   r.status = "cancelled";
   pushEvent(r, user.id, "cancelled");
   await saveRequest(r);
@@ -560,4 +574,244 @@ async function openChildren(id: string) {
 
 export function storageIsPersistent() {
   return kv().persistent;
+}
+
+/* ───────────────────────── zamówienia (best fit + oferty) ───────────────────────── */
+
+export interface DraftInput {
+  title?: string;
+  description?: string;
+  material?: string;
+  color?: string;
+  quantity?: number;
+  dims?: string;
+  infill?: number;
+  layerHeight?: number;
+  deadline?: string;
+  budget?: number;
+  fileUrl?: string;
+  files?: Attachment[];
+  slicer?: SlicerSummary;
+  delivery?: "shipping" | "pickup";
+  city?: string;
+}
+
+const MAX_FILES = 12;
+
+/** Nowy szkic zamówienia — bez drukarza; ten zostanie wybrany przez oferty. */
+export async function createDraft(client: User, source: "file" | "idea" | "slicer", input: DraftInput) {
+  await ensureSeeded();
+  const id = `r_${uid(10)}`;
+  const s = input.slicer;
+  const r: PrintRequest = {
+    id,
+    code: await nextCode(),
+    rootId: id,
+    clientId: client.id,
+    makerId: "",
+    participants: [client.id],
+    title: input.title || (s ? s.modelName.replace(/\.(stl|3mf|step|stp|obj)$/i, "") : "Nowe zamówienie"),
+    description: input.description ?? "",
+    material: input.material || s?.filaments[0]?.material || "PLA",
+    color: input.color || (s && s.filaments.length > 1 ? `${s.filaments.length} kolory` : s?.filaments[0]?.label) || "Dowolny",
+    quantity: input.quantity || s?.quantity || 1,
+    dims: input.dims || (s?.size ? `${s.size.map((v) => Math.round(v)).join(" × ")} mm` : "—"),
+    infill: input.infill ?? s?.infill ?? 20,
+    layerHeight: input.layerHeight ?? s?.layerHeight ?? 0.2,
+    deadline: input.deadline,
+    budget: input.budget,
+    files: (input.files ?? []).slice(0, MAX_FILES),
+    slicer: s,
+    source,
+    delivery: input.delivery ?? "shipping",
+    city: input.city || client.city,
+    status: "draft",
+    events: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  pushEvent(r, client.id, "created");
+  await kv().set(`req:${id}`, r);
+  await kv().sadd("reqs", id);
+  return r;
+}
+
+function assertOwner(r: PrintRequest, user: User) {
+  if (r.parentId || r.clientId !== user.id) throw new DomainError("To nie jest Twoje zamówienie.");
+}
+
+/** Edycja zamówienia — możliwa w szkicu i dopóki zlecenie zbiera oferty. */
+export async function updateOrder(id: string, user: User, input: DraftInput) {
+  const r = await load(id);
+  assertOwner(r, user);
+  assertStatus(r, "draft", "open");
+  Object.assign(r, Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)));
+  if (input.files) r.files = input.files.slice(0, MAX_FILES);
+  if (r.status === "open") pushEvent(r, user.id, "comment", "Zamawiający zaktualizował szczegóły zlecenia.");
+  await saveRequest(r);
+  return r;
+}
+
+/** Publikacja: szkic → giełda zleceń. Najlepiej dopasowani drukarze dostają zaproszenie. */
+export async function publishOrder(id: string, user: User) {
+  const r = await load(id);
+  assertOwner(r, user);
+  assertStatus(r, "draft");
+  if (r.title.trim().length < 4) throw new DomainError("Nadaj zleceniu tytuł (min. 4 znaki).");
+  if (!r.files?.length && r.description.trim().length < 20)
+    throw new DomainError("Dołącz plik albo opisz pomysł (min. 20 znaków), żeby drukarze mogli wycenić zlecenie.");
+  const makers = (await listMakers()).filter((m) => m.id !== user.id);
+  r.invited = bestFit(r, makers).filter((f) => f.score >= 55).slice(0, 3).map((f) => f.makerId);
+  r.status = "open";
+  pushEvent(r, user.id, "published");
+  await saveRequest(r);
+  return r;
+}
+
+export async function listOpenOrders() {
+  return (await listRequests()).filter((r) => r.status === "open");
+}
+
+/* oferty: offer:<reqId>:<makerId> + zbiór offers:<reqId> — każdy drukarz ma jedną ofertę na zlecenie */
+
+async function saveOffer(o: Offer) {
+  o.updatedAt = Date.now();
+  await kv().set(`offer:${o.requestId}:${o.makerId}`, o);
+  await kv().sadd(`offers:${o.requestId}`, o.makerId);
+  await kv().sadd(`maker_offers:${o.makerId}`, o.requestId);
+}
+
+export async function listOffers(requestId: string) {
+  const makers = await kv().smembers(`offers:${requestId}`);
+  const list = (await kv().mget<Offer>(makers.map((m) => `offer:${requestId}:${m}`))).filter(Boolean) as Offer[];
+  return list.sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function getOffer(requestId: string, makerId: string) {
+  return kv().get<Offer>(`offer:${requestId}:${makerId}`);
+}
+
+export async function offerCounts(requestIds: string[]) {
+  const sets = await Promise.all(requestIds.map((id) => kv().smembers(`offers:${id}`)));
+  return Object.fromEntries(requestIds.map((id, i) => [id, sets[i].length]));
+}
+
+/** Zlecenia, w których drukarz złożył ofertę. */
+export async function listMakerOffers(makerId: string) {
+  const reqIds = await kv().smembers(`maker_offers:${makerId}`);
+  const offers = (await kv().mget<Offer>(reqIds.map((r) => `offer:${r}:${makerId}`))).filter(Boolean) as Offer[];
+  return offers.sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function submitOffer(requestId: string, maker: User, input: { price: number; eta: string; note?: string }) {
+  const r = await load(requestId);
+  if (!maker.maker) throw new DomainError("Oferty mogą składać tylko drukarze. Uzupełnij profil drukarza.");
+  if (r.clientId === maker.id) throw new DomainError("Nie możesz składać oferty na własne zlecenie.");
+  assertStatus(r, "open");
+  if (!(input.price > 0 && input.price <= 1_000_000)) throw new DomainError("Podaj cenę w złotych.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.eta)) throw new DomainError("Podaj termin realizacji.");
+  if (input.eta < new Date().toISOString().slice(0, 10)) throw new DomainError("Termin nie może być w przeszłości.");
+  const prev = await getOffer(requestId, maker.id);
+  if (prev?.status === "declined") throw new DomainError("Zamawiający wybrał już inną ofertę.");
+  const o: Offer = {
+    id: prev?.id ?? `o_${uid(8)}`,
+    requestId,
+    makerId: maker.id,
+    price: Math.round(input.price * 100) / 100,
+    eta: input.eta,
+    note: input.note?.trim().slice(0, 1000) || undefined,
+    status: "pending",
+    createdAt: prev?.createdAt ?? Date.now(),
+    updatedAt: Date.now(),
+  };
+  await saveOffer(o);
+  if (!prev || prev.status === "withdrawn") {
+    pushEvent(r, maker.id, "offer", `${o.price} zł · gotowe do ${o.eta}`);
+    await saveRequest(r);
+  }
+  return o;
+}
+
+export async function withdrawOffer(requestId: string, maker: User) {
+  const o = await getOffer(requestId, maker.id);
+  if (!o || o.status !== "pending") throw new DomainError("Nie masz aktywnej oferty w tym zleceniu.");
+  await saveOffer({ ...o, status: "withdrawn" });
+}
+
+/** Zamawiający wybiera ofertę → zlecenie trafia do drukarza jako przyjęte (dalej zwykły przepływ). */
+export async function acceptOffer(requestId: string, user: User, makerId: string) {
+  const r = await load(requestId);
+  assertOwner(r, user);
+  assertStatus(r, "open");
+  const offers = await listOffers(requestId);
+  const o = offers.find((x) => x.makerId === makerId);
+  if (!o || o.status !== "pending") throw new DomainError("Ta oferta nie jest już aktualna.");
+  const maker = await getUser(makerId);
+  if (!maker?.maker) throw new DomainError("Drukarz nie istnieje.");
+  for (const x of offers)
+    if (x.status === "pending") await saveOffer({ ...x, status: x.makerId === makerId ? "accepted" : "declined" });
+  r.makerId = makerId;
+  r.quote = o.price;
+  r.eta = o.eta;
+  r.acceptedOfferId = o.id;
+  r.status = "accepted";
+  if (!r.participants.includes(makerId)) r.participants.push(makerId);
+  pushEvent(r, user.id, "offer_accepted", `${maker.name} · ${o.price} zł · do ${o.eta}`);
+  await saveRequest(r);
+  return r;
+}
+
+/* ───────── przykładowe zlecenia na giełdzie (demo) ───────── */
+
+async function seedV2() {
+  const now = Date.now();
+  let ev = 100;
+  const e = (at: number, actorId: string, type: EventType, note?: string) => ({ id: `e${++ev}`, at, actorId, type, note });
+  const base = { participants: [] as string[], files: [] as Attachment[], makerId: "", delivery: "shipping" as const };
+  const orders: PrintRequest[] = [
+    {
+      ...base, id: "r_co2", code: "WR-1101", rootId: "r_co2", source: "file",
+      title: "Obudowa czujnika CO₂ do montażu na ścianie",
+      description: "Obudowa dwuczęściowa z kratką wentylacyjną, czujnik SCD41 + ESP32-C3. Ważne: dobre dopasowanie zatrzasków i czyste otwory pod USB-C. Kolor jasny, matowy.",
+      clientId: "u_jan", participants: ["u_jan"], city: "Warszawa",
+      material: "PETG", color: "Biały mat", quantity: 4, dims: "88 × 64 × 30 mm", infill: 20, layerHeight: 0.16,
+      deadline: iso(now + 10 * DAY), budget: 160, invited: ["u_kuba", "u_marta", "u_tomek"],
+      status: "open", createdAt: now - 26 * 3600_000, updatedAt: now - 3 * 3600_000,
+      events: [e(now - 26 * 3600_000, "u_jan", "created"), e(now - 26 * 3600_000, "u_jan", "published"),
+        e(now - 20 * 3600_000, "u_kuba", "offer", "145 zł · gotowe do " + iso(now + 5 * DAY)),
+        e(now - 3 * 3600_000, "u_marta", "offer", "128 zł · gotowe do " + iso(now + 4 * DAY))],
+    },
+    {
+      ...base, id: "r_lamp", code: "WR-1102", rootId: "r_lamp", source: "slicer",
+      title: "Klosz lampy — wzór woronoja",
+      description: "Klosz pod żarówkę E27 LED, druk w trybie wazy albo z cienką ścianką. Zależy mi na równej powierzchni bez widocznego szwu.",
+      clientId: "u_ania", participants: ["u_ania"], city: "Łódź",
+      material: "PLA", color: "Mleczny", quantity: 1, dims: "180 × 180 × 220 mm", infill: 0, layerHeight: 0.2,
+      deadline: iso(now + 14 * DAY), invited: ["u_tomek", "u_marta", "u_kuba"],
+      slicer: { modelName: "klosz_voronoi.stl", seconds: 6.4 * 3600, grams: 142, meters: 47.6, plates: 1, changes: 0, quantity: 1, layerHeight: 0.2, infill: 0, walls: 2, supports: "none", profile: "fast", size: [180, 180, 220], filaments: [{ label: "Mleczny", color: "#efe9dc", material: "PLA", grams: 142 }] },
+      status: "open", createdAt: now - 5 * 3600_000, updatedAt: now - 5 * 3600_000,
+      events: [e(now - 5 * 3600_000, "u_ania", "created"), e(now - 5 * 3600_000, "u_ania", "published")],
+    },
+    {
+      ...base, id: "r_meeple", code: "WR-1103", rootId: "r_meeple", source: "idea",
+      title: "Pionki do autorskiej gry planszowej — 4 kolory",
+      description: "Pomysł: 48 pionków w kształcie latarni morskiej (po 12 w czterech kolorach), wysokość ok. 25 mm. Mam szkic i zdjęcie podobnego pionka — mogę dosłać. Szukam kogoś, kto pomoże też dopracować model.",
+      clientId: "u_jan", participants: ["u_jan"], city: "Warszawa",
+      material: "PLA", color: "4 kolory", quantity: 48, dims: "18 × 18 × 25 mm", infill: 15, layerHeight: 0.12,
+      deadline: iso(now + 21 * DAY), budget: 250, invited: ["u_ania", "u_marta", "u_tomek"],
+      status: "open", createdAt: now - 2 * DAY, updatedAt: now - 30 * 3600_000,
+      events: [e(now - 2 * DAY, "u_jan", "created"), e(now - 2 * DAY, "u_jan", "published"),
+        e(now - 30 * 3600_000, "u_ania", "offer", "230 zł · gotowe do " + iso(now + 12 * DAY))],
+    },
+  ];
+  const db = kv();
+  for (const r of orders) {
+    await db.set(`req:${r.id}`, r);
+    await db.sadd("reqs", r.id);
+  }
+  const offer = (requestId: string, makerId: string, price: number, days: number, note: string, at: number) =>
+    saveOffer({ id: `o_${requestId}_${makerId}`, requestId, makerId, price, eta: iso(now + days * DAY), note, status: "pending", createdAt: at, updatedAt: at });
+  await offer("r_co2", "u_kuba", 145, 5, "PETG matowy od ręki. Wydrukuję jedną sztukę testową i podeślę zdjęcie dopasowania zatrzasków przed resztą.", now - 20 * 3600_000);
+  await offer("r_co2", "u_marta", 128, 4, "Mogę wydrukować wszystkie 4 naraz na P1S. Wysyłka InPost w cenie.", now - 3 * 3600_000);
+  await offer("r_meeple", "u_ania", 230, 12, "MMU3 — każdy kolor osobno, bez wieży czyszczącej. Pomogę też poprawić model pod druk 0.12 mm.", now - 30 * 3600_000);
 }

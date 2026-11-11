@@ -4,8 +4,8 @@ import { useEffect, useRef, useState } from "react";
 const STEPS = [
   {
     n: "01",
-    title: "Wysyłasz zapytanie",
-    text: "Wybierasz drukarza, opisujesz model, materiał i termin. Zapytanie trafia prosto do jego skrzynki.",
+    title: "Wysyłasz zlecenie",
+    text: "Plik, pomysł albo model policzony w kalkulatorze. Best fit dobiera drukarzy, którzy pasują najlepiej.",
     tone: "var(--accent)",
     wires: ["ca"],
     nodes: ["client", "a"],
@@ -13,8 +13,8 @@ const STEPS = [
   },
   {
     n: "02",
-    title: "Drukarz akceptuje",
-    text: "Podaje wycenę i termin. Śledzisz status: przyjęte → w druku → wysłane.",
+    title: "Drukarze składają oferty",
+    text: "Cena i termin od każdego. Wybierasz jedną i śledzisz status: przyjęte → w druku → wysłane.",
     tone: "var(--go)",
     wires: ["ca", "aacc"],
     nodes: ["a", "acc"],
@@ -32,7 +32,7 @@ const STEPS = [
   {
     n: "04",
     title: "…albo odrzuca",
-    text: "Z krótkim powodem. Ty jednym kliknięciem przekierowujesz zapytanie do kolejnego drukarza — bez wypełniania od nowa.",
+    text: "Przy zapytaniu wysłanym bezpośrednio do drukarza — z powodem. Jednym kliknięciem przekierujesz je dalej.",
     tone: "var(--stop)",
     wires: ["ca", "arej", "rejc"],
     nodes: ["a", "rej", "client"],
@@ -51,8 +51,8 @@ const WIRES: Record<string, string> = {
 
 const NODES: { id: string; x: number; y: number; k: string; t: string }[] = [
   { id: "client", x: 40, y: 200, k: "ZAMAWIAJĄCY", t: "Jan · WR-1042" },
-  { id: "a", x: 250, y: 200, k: "DRUKARZ A", t: "Kraków · X1C" },
-  { id: "acc", x: 470, y: 60, k: "AKCEPTUJE", t: "540 zł · 5 dni" },
+  { id: "a", x: 250, y: 200, k: "BEST FIT 94%", t: "Kraków · X1C" },
+  { id: "acc", x: 470, y: 60, k: "OFERTA", t: "540 zł · 5 dni" },
   { id: "help", x: 470, y: 200, k: "PROSI O POMOC", t: "Drukarz B · 20 szt." },
   { id: "rej", x: 470, y: 340, k: "ODRZUCA", t: "→ kolejny drukarz" },
 ];

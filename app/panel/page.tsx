@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
-import { listRequests, storageIsPersistent, userMap } from "@/lib/data";
+import { listMakerOffers, listRequests, offerCounts, storageIsPersistent, userMap } from "@/lib/data";
 import { ago, zl } from "@/lib/format";
 import type { PrintRequest, PublicUser, User } from "@/lib/types";
 import { Arrow, Avatar, Empty, StatusPill } from "@/components/ui";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 
 const FINAL = ["completed", "rejected", "cancelled"];
 
-function tabsFor(me: User, all: PrintRequest[]) {
+function tabsFor(me: User, all: PrintRequest[], offered: Set<string>) {
   const mine = all.filter((r) => !r.parentId && r.clientId === me.id);
   const tabs: { id: string; label: string; items: PrintRequest[] }[] = [];
   if (me.maker) {
@@ -24,6 +24,7 @@ function tabsFor(me: User, all: PrintRequest[]) {
         label: "W realizacji",
         items: all.filter((r) => r.makerId === me.id && ["accepted", "printing", "help_requested", "ready"].includes(r.status)),
       },
+      { id: "oferty", label: "Moje oferty", items: all.filter((r) => offered.has(r.id) && r.status === "open") },
       { id: "pomoc", label: "Moje prośby o pomoc", items: all.filter((r) => r.requestedById === me.id) },
     );
   }
@@ -38,21 +39,24 @@ export default async function Panel({ searchParams }: { searchParams: Promise<{ 
   if (!me) redirect("/logowanie?next=/panel");
   const { widok } = await searchParams;
   const all = await listRequests();
-  const tabs = tabsFor(me, all);
+  const myOffers = me.maker ? await listMakerOffers(me.id) : [];
+  const offerByReq = Object.fromEntries(myOffers.filter((o) => o.status !== "withdrawn").map((o) => [o.requestId, o]));
+  const tabs = tabsFor(me, all, new Set(Object.keys(offerByReq)));
   const tab = tabs.find((t) => t.id === widok) ?? tabs[0];
   const people = await userMap(tab.items.flatMap((r) => [r.clientId, r.makerId, r.requestedById ?? ""]));
 
   const mine = all.filter((r) => !r.parentId && r.clientId === me.id);
+  const counts = await offerCounts(mine.filter((r) => r.status === "open").map((r) => r.id));
   const kpis = me.maker
     ? [
-        ["Do decyzji", tabs[0].items.length],
-        ["W realizacji", tabs[1].items.length],
-        ["Prośby o pomoc", tabs[2].items.filter((r) => r.status === "pending").length],
+        ["Do decyzji", tabs.find((t) => t.id === "do-decyzji")!.items.length],
+        ["W realizacji", tabs.find((t) => t.id === "realizacja")!.items.length],
+        ["Oferty w toku", tabs.find((t) => t.id === "oferty")!.items.length],
         ["Zrealizowane", me.maker.jobsDone],
       ]
     : [
         ["Aktywne", mine.filter((r) => !FINAL.includes(r.status)).length],
-        ["Wymaga reakcji", mine.filter((r) => r.status === "ready" || r.status === "rejected").length],
+        ["Nowe oferty", Object.values(counts).reduce((a, b) => a + b, 0)],
         ["Zakończone", mine.filter((r) => r.status === "completed").length],
         ["Wydano", zl(mine.filter((r) => r.status === "completed").reduce((s, r) => s + (r.quote ?? 0), 0))],
       ];
@@ -71,8 +75,9 @@ export default async function Panel({ searchParams }: { searchParams: Promise<{ 
             </p>
           </div>
           <div className="row">
-            <Link href="/zapytania/nowe" className="btn btn-primary">
-              Nowe zapytanie <Arrow />
+            {me.maker && <Link href="/zlecenia" className="btn">Przeglądaj zlecenia</Link>}
+            <Link href="/zamow" className="btn btn-primary">
+              Złóż zamówienie <Arrow />
             </Link>
             <form action={logoutAction}>
               <button className="btn btn-ghost" type="submit">Wyloguj</button>
@@ -108,7 +113,7 @@ export default async function Panel({ searchParams }: { searchParams: Promise<{ 
         {tab.items.length ? (
           <div className="req-list" key={tab.id}>
             {tab.items.map((r, i) => (
-              <Row key={r.id} r={r} me={me} people={people} i={i} />
+              <Row key={r.id} r={r} me={me} people={people} i={i} offers={counts[r.id]} myOffer={offerByReq[r.id]?.price} />
             ))}
           </div>
         ) : (
@@ -118,12 +123,14 @@ export default async function Panel({ searchParams }: { searchParams: Promise<{ 
               tab.id === "do-decyzji"
                 ? "Nowe zapytania od zamawiających i prośby o pomoc pojawią się tutaj."
                 : tab.id === "zamowienia"
-                  ? "Wybierz drukarza i wyślij pierwsze zapytanie."
+                  ? "Wgraj plik, opisz pomysł albo policz model w kalkulatorze — drukarze przyślą oferty."
                   : "Pojawią się tu zlecenia w tym etapie."
             }
             action={
               tab.id === "zamowienia" ? (
-                <Link href="/drukarze" className="btn">Przeglądaj drukarzy <Arrow /></Link>
+                <Link href="/zamow" className="btn">Złóż zamówienie <Arrow /></Link>
+              ) : tab.id === "oferty" ? (
+                <Link href="/zlecenia" className="btn">Przeglądaj zlecenia <Arrow /></Link>
               ) : undefined
             }
           />
@@ -133,13 +140,14 @@ export default async function Panel({ searchParams }: { searchParams: Promise<{ 
   );
 }
 
-function Row({ r, me, people, i }: { r: PrintRequest; me: User; people: Record<string, PublicUser>; i: number }) {
+function Row({ r, me, people, i, offers, myOffer }: { r: PrintRequest; me: User; people: Record<string, PublicUser>; i: number; offers?: number; myOffer?: number }) {
   // kontrahent: dla drukarza — kto prosi; dla zamawiającego — kto drukuje
   const otherId = r.makerId === me.id ? (r.parentId ? r.requestedById! : r.clientId) : r.makerId;
   const other = people[otherId];
   const role = r.makerId === me.id ? (r.parentId ? "prosi" : "zamawia") : "drukuje";
+  const market = r.status === "draft" || r.status === "open";
   return (
-    <Link href={`/zapytania/${r.id}`} className="req-row" style={{ ["--i" as string]: i }}>
+    <Link href={r.status === "draft" ? `/zamow/${r.id}` : `/zapytania/${r.id}`} className="req-row" style={{ ["--i" as string]: i }}>
       <span className="mono dim">{r.code}</span>
       <div style={{ minWidth: 0 }}>
         <div className="req-title">
@@ -152,10 +160,24 @@ function Row({ r, me, people, i }: { r: PrintRequest; me: User; people: Record<s
         </div>
       </div>
       <div className="req-person">
-        {other && <Avatar name={other.name} size="sm" />}
-        <span>
-          <span className="dim">{role}</span> {other?.name.split(" ")[0] ?? "—"}
-        </span>
+        {market ? (
+          <span className="dim">
+            {r.status === "draft"
+              ? "szkic — dokończ"
+              : myOffer
+                ? `Twoja oferta: ${myOffer} zł`
+                : offers
+                  ? <b className="accent">{offers} {offers === 1 ? "oferta" : offers < 5 ? "oferty" : "ofert"}</b>
+                  : "czeka na oferty"}
+          </span>
+        ) : (
+          <>
+            {other && <Avatar name={other.name} size="sm" />}
+            <span>
+              <span className="dim">{role}</span> {other?.name.split(" ")[0] ?? "—"}
+            </span>
+          </>
+        )}
       </div>
       <div><StatusPill status={r.status} /></div>
       <span className="req-when mono dim" style={{ textAlign: "right" }}>{ago(r.updatedAt)}</span>

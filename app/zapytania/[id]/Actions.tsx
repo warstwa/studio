@@ -1,7 +1,10 @@
 "use client";
 import { useActionState, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   advanceAction,
+  offerAction,
+  withdrawOfferAction,
   cancelAction,
   completeAction,
   decideAction,
@@ -9,7 +12,7 @@ import {
   type FormState,
 } from "@/app/actions";
 import Submit from "@/components/Submit";
-import type { PrintRequest, PublicUser } from "@/lib/types";
+import type { Offer, PrintRequest, PublicUser } from "@/lib/types";
 
 type Helper = PublicUser & { involved: boolean };
 
@@ -28,6 +31,8 @@ export default function Actions({
   helpers,
   reassignTo,
   openChildren,
+  viewerIsMaker = false,
+  myOffer = null,
 }: {
   r: PrintRequest;
   isMaker: boolean;
@@ -35,7 +40,14 @@ export default function Actions({
   helpers: Helper[];
   reassignTo: PublicUser[];
   openChildren: number;
+  viewerIsMaker?: boolean;
+  myOffer?: Offer | null;
 }) {
+  if (r.status === "open") {
+    if (isOwner) return <OwnerOpen r={r} />;
+    if (viewerIsMaker) return <OfferForm r={r} mine={myOffer} />;
+    return <Info r={r} isMaker={false} />;
+  }
   if (isMaker && (r.status === "pending" || r.status === "help_requested"))
     return <Decide r={r} helpers={helpers} openChildren={openChildren} />;
   if (isMaker && (r.status === "accepted" || r.status === "printing"))
@@ -321,8 +333,103 @@ function Cancel({ r }: { r: PrintRequest }) {
   );
 }
 
+/* ───────── giełda: oferta drukarza ───────── */
+
+function OfferForm({ r, mine }: { r: PrintRequest; mine: Offer | null }) {
+  const [state, action] = useActionState(offerAction, undefined);
+  const [wState, wAction] = useActionState(withdrawOfferAction, undefined);
+  const [edit, setEdit] = useState(!mine || mine.status !== "pending");
+  const toast = useToast(state, mine ? "Oferta zaktualizowana" : "Oferta wysłana do zamawiającego");
+  useEffect(() => {
+    if (state?.ok) setEdit(false);
+  }, [state]);
+  const minDate = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+  const declined = mine?.status === "declined";
+
+  return (
+    <div className="panel">
+      {toast}
+      <div className="panel-head">
+        <span className="mono">{mine?.status === "pending" ? "Twoja oferta" : "Złóż ofertę"}</span>
+        <span className="mono dim">{r.code}</span>
+      </div>
+      <div className="panel-body decide">
+        {declined ? (
+          <p className="muted" style={{ fontSize: 14 }}>Zamawiający wybrał inną ofertę.</p>
+        ) : mine?.status === "pending" && !edit ? (
+          <>
+            <div className="offer-mine">
+              <div><span className="mono dim">Cena</span><b>{mine.price.toLocaleString("pl-PL")} zł</b></div>
+              <div><span className="mono dim">Gotowe do</span><b>{new Date(mine.eta + "T12:00").toLocaleDateString("pl-PL", { day: "numeric", month: "short" })}</b></div>
+            </div>
+            {mine.note && <p className="offer-note">{mine.note}</p>}
+            <p className="hint">Zamawiający widzi Twoją ofertę. Dostaniesz zlecenie, gdy ją przyjmie.</p>
+            <div className="row">
+              <button type="button" className="btn btn-sm" onClick={() => setEdit(true)}>Zmień ofertę</button>
+              <form action={wAction}>
+                <input type="hidden" name="id" value={r.id} />
+                <Submit className="btn btn-ghost btn-sm" pendingText="…">Wycofaj</Submit>
+              </form>
+            </div>
+            {wState?.error && <div className="alert" role="alert">{wState.error}</div>}
+          </>
+        ) : (
+          <form action={action} className="decide">
+            <input type="hidden" name="id" value={r.id} />
+            <div className="form-grid">
+              <div className="field">
+                <label htmlFor="price">Cena (zł)</label>
+                <input className="input" id="price" name="price" type="number" min={1} step="0.01" required defaultValue={mine?.price}
+                  placeholder={r.budget ? `budżet ${r.budget}` : "np. 120"} />
+              </div>
+              <div className="field">
+                <label htmlFor="eta">Gotowe do</label>
+                <input className="input" id="eta" name="eta" type="date" min={minDate} required defaultValue={mine?.eta ?? r.deadline} />
+              </div>
+            </div>
+            <textarea className="textarea" name="note" defaultValue={mine?.note} style={{ minHeight: 90 }}
+              placeholder="Jak wydrukujesz zlecenie: maszyna, materiał, wysyłka, pytania do zamawiającego…" />
+            {r.budget ? <p className="hint">Budżet zamawiającego: do {r.budget} zł.</p> : null}
+            <Submit className="btn btn-primary" pendingText="Wysyłanie…">{mine?.status === "pending" ? "Zapisz zmiany" : "Wyślij ofertę"}</Submit>
+            {mine?.status === "pending" && <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEdit(false)}>Anuluj</button>}
+            {state?.error && <div className="alert" role="alert">{state.error}</div>}
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OwnerOpen({ r }: { r: PrintRequest }) {
+  const [state, action] = useActionState(cancelAction, undefined);
+  const [sure, setSure] = useState(false);
+  return (
+    <div className="panel">
+      <div className="panel-head"><span className="mono">Twoje zlecenie</span><span className="mono dim">{r.code}</span></div>
+      <div className="panel-body decide">
+        <p className="muted" style={{ fontSize: 14 }}>
+          Zlecenie jest na giełdzie. Porównaj oferty po lewej i przyjmij jedną — wtedy drukarz zaczyna pracę.
+        </p>
+        <Link href={`/zamow/${r.id}`} className="btn">Edytuj szczegóły</Link>
+        {sure ? (
+          <form action={action} className="row">
+            <input type="hidden" name="id" value={r.id} />
+            <Submit className="btn btn-stop btn-sm" pendingText="…">Tak, anuluj zlecenie</Submit>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setSure(false)}>Nie</button>
+          </form>
+        ) : (
+          <button type="button" className="btn btn-ghost" onClick={() => setSure(true)}>Anuluj zlecenie</button>
+        )}
+        {state?.error && <div className="alert" role="alert">{state.error}</div>}
+      </div>
+    </div>
+  );
+}
+
 function Info({ r, isMaker }: { r: PrintRequest; isMaker: boolean }) {
   const text: Record<string, string> = {
+    draft: "Szkic zamówienia.",
+    open: "Zlecenie zbiera oferty od drukarzy.",
     pending: "Zapytanie czeka na decyzję drukarza.",
     help_requested: "Drukarz szuka pomocy innego drukarza.",
     accepted: "Zlecenie przyjęte — wkrótce ruszy druk.",

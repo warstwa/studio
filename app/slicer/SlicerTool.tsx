@@ -1,7 +1,11 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { slicerOrderAction } from "@/app/actions";
+import { uploadFiles } from "@/lib/upload-client";
+import { stashOrder, takeStash } from "@/lib/order-stash";
+import type { SlicerSummary } from "@/lib/types";
 import {
   DEFAULT_SETTINGS,
   MATERIALS,
@@ -45,7 +49,25 @@ function linear(hex: string): [number, number, number] {
 
 type Results = { plan: Plan; other: Plan | null };
 
-export default function SlicerTool() {
+/** Materiał z kalkulatora → nazwa w zamówieniach. */
+const ORDER_MATERIAL: Record<string, string> = { PLA: "PLA", PETG: "PETG", ABS: "ABS", ASA: "ASA", TPU: "TPU 95A", PA: "PA", PC: "PC" };
+
+type Account = { id: string } | null;
+
+export default function SlicerTool({
+  account = null,
+  blob = false,
+  resume = false,
+  remote,
+}: {
+  account?: Account;
+  blob?: boolean;
+  resume?: boolean;
+  remote?: { url: string; name: string };
+}) {
+  const router = useRouter();
+  const sourceFiles = useRef<File[]>([]);
+  const [ordering, setOrdering] = useState<string | null>(null);
   const [model, setModel] = useState<Model | null>(null);
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [groupFilament, setGroupFilament] = useState<number[]>([]);
@@ -175,6 +197,7 @@ export default function SlicerTool() {
     setError(null);
     setLoading(files.some((f) => /\.(step|stp)$/i.test(f.name)) ? "Wczytywanie STEP (pierwszy raz pobiera moduł CAD)…" : "Wczytywanie modelu…");
     try {
+      sourceFiles.current = append ? [...sourceFiles.current, ...files] : files;
       let m: Model | null = null;
       for (const f of files) {
         const part = await loadModel(f);
@@ -231,8 +254,97 @@ export default function SlicerTool() {
   const singleTotal = other && effPlateMode === "perColor" ? other : plan;
   const perColorTotal = other && effPlateMode === "perColor" ? plan : other;
 
+  // ── „Dodaj do zamówienia” ──
+  const summary = (): SlicerSummary | null => {
+    if (!plan || !model) return null;
+    return {
+      modelName: model.name,
+      seconds: plan.seconds * q,
+      grams: totalGrams * q,
+      meters: plan.meters * q,
+      plates: plan.plates.length,
+      changes: plan.changes * q,
+      quantity: q,
+      layerHeight: settings.layerHeight,
+      infill: settings.infill,
+      walls: settings.walls,
+      supports: settings.supports,
+      profile: settings.profile,
+      size: one ? (one.est.size.map((v) => Math.round(v * 10) / 10) as [number, number, number]) : undefined,
+      filaments: (usedFilaments.length ? usedFilaments : [0]).map((i) => ({
+        label: filaments[i]?.label ?? `Filament ${i + 1}`,
+        color: filaments[i]?.color ?? "#888888",
+        material: ORDER_MATERIAL[filaments[i]?.material ?? "PLA"] ?? "PLA",
+        grams: (plan.grams[i] ?? 0) * q,
+      })),
+    };
+  };
+
+  async function submitOrder(s: SlicerSummary, files: File[]) {
+    if (!account) return;
+    try {
+      setOrdering(files.length ? "Wysyłanie plików modelu…" : "Tworzenie zamówienia…");
+      const attached = files.length ? await uploadFiles(files, { blob, userId: account.id, onProgress: (_, p) => setOrdering(`Wysyłanie plików modelu… ${p}%`) }) : [];
+      setOrdering("Tworzenie zamówienia…");
+      const res = await slicerOrderAction({ slicer: s, files: attached });
+      if (res.error || !res.id) throw new Error(res.error || "Nie udało się utworzyć zamówienia.");
+      router.push(`/zamow/${res.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Nie udało się utworzyć zamówienia.");
+      setOrdering(null);
+    }
+  }
+
+  async function addToOrder() {
+    const s = summary();
+    if (!s) return;
+    if (!account) {
+      // zapamiętaj pracę i wróć tu po zalogowaniu
+      try {
+        await stashOrder(s, sourceFiles.current);
+      } catch {}
+      router.push(`/logowanie?next=${encodeURIComponent("/slicer?wznow=1")}`);
+      return;
+    }
+    await submitOrder(s, sourceFiles.current);
+  }
+
+  // powrót po logowaniu: dokończ „Dodaj do zamówienia”
+  const resumed = useRef(false);
+  useEffect(() => {
+    if (!resume || !account || resumed.current) return;
+    resumed.current = true;
+    takeStash().then((st) => {
+      if (st) submitOrder(st.slicer, st.files);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resume, account]);
+
+  // model ze zlecenia: /slicer?plik=…
+  const loadedRemote = useRef(false);
+  useEffect(() => {
+    if (!remote || loadedRemote.current) return;
+    loadedRemote.current = true;
+    setLoading("Pobieranie modelu ze zlecenia…");
+    fetch(remote.url)
+      .then((r) => {
+        if (!r.ok) throw new Error("Nie udało się pobrać modelu.");
+        return r.blob();
+      })
+      .then((b) => open([new File([b], remote.name)], false))
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Nie udało się pobrać modelu.");
+        setLoading(null);
+      });
+  }, [remote, open]);
+
   return (
     <div className="two-col slicer">
+      {ordering && (
+        <div className="order-overlay" role="status">
+          <span className="spinner" /> {ordering}
+        </div>
+      )}
       <div className="stack">
         <div
           className={`panel dropzone${drag ? " drag" : ""}${model ? " has-file" : ""}`}
@@ -636,9 +748,16 @@ export default function SlicerTool() {
 
           <p className="hint">Materiał i kolor ustawiasz dla każdego filamentu w sekcji „Filamenty i części”.</p>
 
-          <Link href="/zapytania/nowe" className="btn btn-primary btn-lg">
-            Zamów wydruk u drukarza
-          </Link>
+          <button type="button" className="btn btn-primary btn-lg" onClick={addToOrder} disabled={!plan || busy || !!ordering}>
+            {ordering ? "Tworzenie zamówienia…" : "Dodaj do zamówienia →"}
+          </button>
+          <p className="hint">
+            {plan
+              ? account
+                ? "Zapiszemy ustawienia i model w zamówieniu. W następnym kroku dodasz termin, budżet i szczegóły."
+                : "Zaloguj się, aby dodać do zamówienia — Twój model i ustawienia poczekają."
+              : "Wgraj model, aby dodać go do zamówienia."}
+          </p>
         </div>
       </aside>
     </div>

@@ -18,7 +18,8 @@ import {
 } from "@/lib/auth";
 import { burnTime, needsRehash, passwordProblem } from "@/lib/password";
 import * as D from "@/lib/data";
-import { MATERIALS } from "@/lib/types";
+import { MATERIALS, type Attachment, type SlicerSummary } from "@/lib/types";
+import { parseAttachments } from "@/lib/files";
 
 export type FormState = { error?: string; ok?: string } | undefined;
 
@@ -215,6 +216,7 @@ async function run(id: string, fn: () => Promise<unknown>): Promise<FormState> {
   }
   revalidatePath(`/zapytania/${id}`);
   revalidatePath("/panel");
+  revalidatePath("/zlecenia");
   return { ok: "ok" };
 }
 
@@ -262,4 +264,118 @@ export async function commentAction(_: FormState, f: FormData): Promise<FormStat
   const id = str(f, "id");
   const u = await requireUser(`/zapytania/${id}`);
   return run(id, () => D.addComment(id, u, str(f, "text", 2000)));
+}
+
+/* ───────── zamówienia: szkic → giełda → oferty ───────── */
+
+function orderFields(f: FormData): D.DraftInput {
+  const material = str(f, "material", 40);
+  const delivery = str(f, "delivery");
+  const deadline = str(f, "deadline", 10);
+  return {
+    title: str(f, "title", 120) || undefined,
+    description: f.has("description") ? str(f, "description", 4000) : undefined,
+    material: (MATERIALS as readonly string[]).includes(material) ? material : undefined,
+    color: str(f, "color", 40) || undefined,
+    quantity: f.has("quantity") ? Math.min(10000, Math.round(num(f, "quantity") ?? 1)) : undefined,
+    dims: str(f, "dims", 60) || undefined,
+    infill: f.has("infill") ? Math.min(100, Math.max(0, Math.round(Number(f.get("infill")) || 0))) : undefined,
+    layerHeight: num(f, "layerHeight"),
+    deadline: /^\d{4}-\d{2}-\d{2}$/.test(deadline) ? deadline : undefined,
+    budget: f.has("budget") ? num(f, "budget") ?? 0 : undefined,
+    delivery: delivery === "pickup" ? "pickup" : delivery === "shipping" ? "shipping" : undefined,
+    city: str(f, "city", 60) || undefined,
+    files: f.has("files") ? parseAttachments(f.get("files")) : undefined,
+  };
+}
+
+/** Start zamówienia: plik(i) albo pomysł → szkic do uzupełnienia. */
+export async function startOrderAction(_: FormState, f: FormData): Promise<FormState> {
+  const u = await requireUser("/zamow");
+  const kind = str(f, "kind") === "idea" ? "idea" : "file";
+  const input = orderFields(f);
+  if (kind === "file" && !input.files?.length) return { error: "Dodaj co najmniej jeden plik modelu." };
+  if (kind === "idea" && (input.description ?? "").length < 20) return { error: "Opisz pomysł w kilku zdaniach (min. 20 znaków)." };
+  const r = await D.createDraft(u, kind, input);
+  redirect(`/zamow/${r.id}`);
+}
+
+/** Wywoływane przez slicer po kliknięciu „Dodaj do zamówienia”. */
+export async function slicerOrderAction(payload: { slicer: SlicerSummary; files: Attachment[] }): Promise<{ id?: string; error?: string }> {
+  const u = await currentUser();
+  if (!u) return { error: "Zaloguj się, aby dodać do zamówienia." };
+  const s = payload?.slicer;
+  if (!s || typeof s.seconds !== "number" || !Array.isArray(s.filaments)) return { error: "Brak danych z kalkulatora." };
+  const clean: SlicerSummary = {
+    modelName: String(s.modelName ?? "model").slice(0, 160),
+    seconds: Math.max(0, +s.seconds || 0),
+    grams: Math.max(0, +s.grams || 0),
+    meters: Math.max(0, +s.meters || 0),
+    plates: Math.max(1, Math.round(+s.plates || 1)),
+    changes: Math.max(0, Math.round(+s.changes || 0)),
+    quantity: Math.max(1, Math.min(10000, Math.round(+s.quantity || 1))),
+    layerHeight: +s.layerHeight || 0.2,
+    infill: Math.max(0, Math.min(100, +s.infill || 0)),
+    walls: Math.max(1, Math.min(10, Math.round(+s.walls || 2))),
+    supports: String(s.supports ?? "none").slice(0, 20),
+    profile: String(s.profile ?? "").slice(0, 20),
+    size: Array.isArray(s.size) && s.size.length === 3 ? (s.size.map((v) => +v || 0) as [number, number, number]) : undefined,
+    filaments: s.filaments.slice(0, 16).map((x) => ({
+      label: String(x.label ?? "").slice(0, 40),
+      color: /^#[0-9a-f]{6}$/i.test(x.color) ? x.color : "#888888",
+      material: String(x.material ?? "PLA").slice(0, 20),
+      grams: Math.max(0, +x.grams || 0),
+    })),
+  };
+  const r = await D.createDraft(u, "slicer", { slicer: clean, files: parseAttachments(payload.files) });
+  return { id: r.id };
+}
+
+/** Zapis szkicu / edycja zlecenia; intent=publish wysyła je na giełdę. */
+export async function saveOrderAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zamow/${id}`);
+  const intent = str(f, "intent");
+  try {
+    await D.updateOrder(id, u, orderFields(f));
+    if (intent === "publish") await D.publishOrder(id, u);
+  } catch (e) {
+    return fail(e);
+  }
+  revalidatePath("/zlecenia");
+  revalidatePath("/panel");
+  revalidatePath(`/zamow/${id}`);
+  if (intent === "publish") redirect(`/zapytania/${id}?opublikowano=1`);
+  if (intent === "done") redirect(`/zapytania/${id}`);
+  return { ok: "Zapisano." };
+}
+
+export async function offerAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zapytania/${id}`);
+  return run(id, () => D.submitOffer(id, u, { price: num(f, "price") ?? 0, eta: str(f, "eta", 10), note: str(f, "note", 1000) }));
+}
+
+export async function withdrawOfferAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zapytania/${id}`);
+  return run(id, () => D.withdrawOffer(id, u));
+}
+
+export async function acceptOfferAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zapytania/${id}`);
+  return run(id, () => D.acceptOffer(id, u, str(f, "makerId")));
+}
+
+export async function deleteOrderAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zamow/${id}`);
+  try {
+    await D.cancelRequest(id, u);
+  } catch (e) {
+    return fail(e);
+  }
+  revalidatePath("/zlecenia");
+  redirect("/panel?widok=zamowienia");
 }

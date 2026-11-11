@@ -1,6 +1,8 @@
 import type { EventType, RequestStatus } from "./types";
 
 export const STATUS: Record<RequestStatus, { label: string; tone: "wait" | "go" | "help" | "done" | "stop" | "mute" }> = {
+  draft: { label: "Szkic", tone: "mute" },
+  open: { label: "Zbiera oferty", tone: "help" },
   pending: { label: "Czeka na decyzję", tone: "wait" },
   help_requested: { label: "Szuka pomocy", tone: "help" },
   accepted: { label: "Przyjęte", tone: "go" },
@@ -12,6 +14,9 @@ export const STATUS: Record<RequestStatus, { label: string; tone: "wait" | "go" 
 };
 
 export const EVENT_LABEL: Record<EventType, string> = {
+  published: "opublikował(a) zlecenie",
+  offer: "złożył(a) ofertę",
+  offer_accepted: "przyjął/przyjęła ofertę",
   created: "utworzył(a) zapytanie",
   accepted: "przyjął/przyjęła zlecenie",
   rejected: "odrzucił(a) zapytanie",
@@ -54,4 +59,16 @@ export function initials(name: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+export function duration(sec: number) {
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  return `${h} h ${String(m % 60).padStart(2, "0")} min`;
+}
+
+export function bytes(n: number) {
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+  return `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
 }

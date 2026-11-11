@@ -1,11 +1,16 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
-import { canView, getRequest, getTree, listMakers, toPublic, userMap } from "@/lib/data";
+import { canView, getRequest, getTree, listMakers, listOffers, toPublic, userMap } from "@/lib/data";
 import { EVENT_LABEL, STATUS, ago, date, zl } from "@/lib/format";
 import type { PrintRequest, PublicUser, RequestEvent } from "@/lib/types";
 import { Avatar, StatusPill } from "@/components/ui";
 import Actions from "./Actions";
+import OffersPanel from "./OffersPanel";
+import FitList from "@/components/FitList";
+import SlicerCard from "@/components/SlicerCard";
+import FilesPanel from "@/components/FilesPanel";
+import { bestFit } from "@/lib/match";
 import CommentForm from "./CommentForm";
 
 export const dynamic = "force-dynamic";
@@ -35,14 +40,15 @@ export default async function RequestPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ wyslano?: string }>;
+  searchParams: Promise<{ wyslano?: string; opublikowano?: string }>;
 }) {
   const { id } = await params;
-  const { wyslano } = await searchParams;
+  const { wyslano, opublikowano } = await searchParams;
   const me = await currentUser();
   if (!me) redirect(`/logowanie?next=/zapytania/${id}`);
   const r = await getRequest(id);
   if (!r || !(await canView(r, me.id))) notFound();
+  if (r.status === "draft") redirect(`/zamow/${r.id}`);
 
   const tree = await getTree(r.rootId);
   const parent = r.parentId ? tree.find((t) => t.id === r.parentId) : undefined;
@@ -63,12 +69,24 @@ export default async function RequestPage({
   const step = STEP_OF[r.status] ?? -1;
   const openChildren = tree.filter((t) => t.parentId === r.id && t.status === "pending");
 
+  // giełda: oferty i dopasowanie
+  const isOpen = r.status === "open";
+  const offers = isOpen ? await listOffers(r.id) : [];
+  const myOffer = offers.find((o) => o.makerId === me.id && o.status !== "withdrawn") ?? null;
+  const allMakers = isOpen && owner === me.id ? await listMakers() : [];
+  const fits = isOpen && owner === me.id ? bestFit(r, allMakers.filter((m) => m.id !== me.id)) : [];
+  const fitById = Object.fromEntries(fits.map((f) => [f.makerId, f]));
+  const offerPeople = isOpen ? await userMap(offers.map((o) => o.makerId)) : {};
+  // oferty konkurencji są niejawne — drukarz widzi w historii tylko swoją
+  const events = r.events.filter((e) => e.type !== "offer" || owner === me.id || e.actorId === me.id);
+
   return (
     <div className="page">
       {wyslano && <div className="toast">Zapytanie {r.code} wysłane do: {people[r.makerId]?.name}</div>}
+      {opublikowano && <div className="toast">Zlecenie {r.code} jest na giełdzie — drukarze mogą składać oferty</div>}
       <div className="wrap">
         <div className="crumbs mono">
-          <Link href="/panel">Panel</Link> / {parent && <><Link href={`/zapytania/${parent.id}`}>{parent.code}</Link> / </>}
+          <Link href={r.status === "open" && owner !== me.id ? "/zlecenia" : "/panel"}>{r.status === "open" && owner !== me.id ? "Zlecenia" : "Panel"}</Link> / {parent && <><Link href={`/zapytania/${parent.id}`}>{parent.code}</Link> / </>}
           <span>{r.code}</span>
         </div>
         <div className="req-hero">
@@ -101,7 +119,20 @@ export default async function RequestPage({
               </div>
             )}
 
-            {!["rejected", "cancelled"].includes(r.status) && (
+            {isOpen && owner === me.id && fits.length > 0 && offers.length === 0 && (
+              <FitList fits={fits.slice(0, 3)} makers={Object.fromEntries(allMakers.map((m) => [m.id, toPublic(m)]))} invited={r.invited} title="Zaproszeni drukarze"
+                note="Najlepiej dopasowani drukarze dostali zaproszenie. Zlecenie widzą też wszyscy drukarze w zakładce Zlecenia — oferty pojawią się tutaj." />
+            )}
+            {isOpen && owner === me.id && (
+              <OffersPanel r={r} offers={offers} people={offerPeople} fits={fitById} />
+            )}
+            {isOpen && owner !== me.id && (
+              <div className="banner">
+                Zlecenie zbiera oferty ({offers.filter((o) => o.status === "pending").length}). Ceny innych drukarzy są niewidoczne — zamawiający wybierze jedną ofertę.
+              </div>
+            )}
+
+            {!["rejected", "cancelled", "open"].includes(r.status) && (
               <div className="progress" aria-label={`Etap: ${STATUS[r.status].label}`}>
                 {STEPS.map((s, i) => (
                   <div key={s} className={i <= step ? (i === step && step < 4 && step > 0 ? "on now" : "on") : ""} style={{ ["--i" as string]: i }}>
@@ -123,13 +154,16 @@ export default async function RequestPage({
               <Spec k={r.quote ? "Wycena" : "Budżet"} v={r.quote ? zl(r.quote) : zl(r.budget)} accent={!!r.quote} />
             </div>
 
+            {r.slicer && <SlicerCard s={r.slicer} />}
+            {r.files && r.files.length > 0 && <FilesPanel files={r.files} />}
+
             <div className="panel">
               <div className="panel-head">
                 <span className="mono">Opis</span>
                 {r.eta && <span className="mono dim">Termin wykonawcy: {date(r.eta)}</span>}
               </div>
               <div className="panel-body">
-                <p className="desc">{r.description}</p>
+                <p className="desc">{r.description || "Brak opisu — szczegóły w plikach."}</p>
                 {r.fileUrl && (
                   <a href={r.fileUrl} target="_blank" rel="noopener noreferrer" className="btn btn-sm" style={{ marginTop: 18 }}>
                     Pobierz model ↗
@@ -162,7 +196,7 @@ export default async function RequestPage({
               <div className="panel-head"><span className="mono">Historia i wiadomości</span></div>
               <div className="panel-body">
                 <ol className="timeline">
-                  {r.events.map((e, i) => (
+                  {events.map((e, i) => (
                     <Event key={e.id} e={e} people={people} tree={tree} i={i} />
                   ))}
                 </ol>
@@ -179,6 +213,8 @@ export default async function RequestPage({
               helpers={helpers}
               reassignTo={reassignTo}
               openChildren={openChildren.length}
+              viewerIsMaker={!!me.maker}
+              myOffer={myOffer}
             />
             <div className="panel">
               <div className="panel-head"><span className="mono">Uczestnicy</span></div>

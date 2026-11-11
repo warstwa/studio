@@ -27,6 +27,8 @@ export interface User {
 export type PublicUser = Omit<User, "passHash" | "email">;
 
 export type RequestStatus =
+  | "draft" // szkic zamówienia — widzi go tylko zamawiający
+  | "open" // zlecenie na giełdzie — drukarze składają oferty
   | "pending" // czeka na decyzję drukarza (makerId)
   | "help_requested" // drukarz poprosił o pomoc i czeka na odpowiedź
   | "accepted" // przyjęte do realizacji
@@ -37,6 +39,9 @@ export type RequestStatus =
   | "cancelled"; // anulowane
 
 export type EventType =
+  | "published"
+  | "offer"
+  | "offer_accepted"
   | "created"
   | "accepted"
   | "rejected"
@@ -82,6 +87,15 @@ export interface PrintRequest {
   quote?: number; // wycena drukarza, zł
   eta?: string; // YYYY-MM-DD
   status: RequestStatus;
+  /** skąd pochodzi zlecenie */
+  source?: "file" | "idea" | "slicer" | "direct";
+  files?: Attachment[];
+  slicer?: SlicerSummary;
+  delivery?: "shipping" | "pickup";
+  city?: string;
+  /** drukarze wskazani przez dopasowanie (best fit) w chwili publikacji */
+  invited?: string[];
+  acceptedOfferId?: string;
   events: RequestEvent[];
   createdAt: number;
   updatedAt: number;
@@ -94,8 +108,46 @@ export const MATERIALS = [
   "ABS",
   "ASA",
   "TPU 95A",
+  "PA",
   "PA-CF",
   "PC",
   "Żywica standard",
   "Żywica twarda",
 ] as const;
+
+export interface Attachment {
+  name: string;
+  url: string;
+  size: number;
+  kind: "model" | "image" | "other";
+}
+
+/** Wynik z kalkulatora (slicera) zapisany przy „Dodaj do zamówienia”. */
+export interface SlicerSummary {
+  modelName: string;
+  seconds: number;
+  grams: number;
+  meters: number;
+  plates: number;
+  changes: number;
+  quantity: number;
+  layerHeight: number;
+  infill: number;
+  walls: number;
+  supports: string;
+  profile: string;
+  size?: [number, number, number];
+  filaments: { label: string; color: string; material: string; grams: number }[];
+}
+
+export interface Offer {
+  id: string;
+  requestId: string;
+  makerId: string;
+  price: number;
+  eta: string; // YYYY-MM-DD
+  note?: string;
+  status: "pending" | "accepted" | "declined" | "withdrawn";
+  createdAt: number;
+  updatedAt: number;
+}
