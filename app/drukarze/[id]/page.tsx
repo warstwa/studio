@@ -23,7 +23,9 @@ export default async function MakerPage({ params }: { params: Promise<{ id: stri
   const m = u.maker;
   const reviews = await listReviews(u.id);
   const authors = await userMap(reviews.map((r) => r.clientId));
-  const reviewPhotos = reviews.flatMap((r) => r.photos);
+  // zdjęcia z opinii dołączamy do galerii, bez powtórzeń
+  const own = new Set((u.portfolio ?? []).map((p) => p.url));
+  const reviewPhotos = reviews.flatMap((r) => r.photos).filter((p) => !own.has(p.url) && (own.add(p.url), true));
   const active = (await listRequests()).filter(
     (r) => r.makerId === u.id && ["accepted", "printing"].includes(r.status),
   ).length;
