@@ -10,8 +10,8 @@ export default async function Nav() {
   if (user) {
     const all = await listRequests();
     pending =
-      all.filter((r) => r.makerId === user.id && r.status === "pending").length +
-      all.filter((r) => (r.parentId ? r.requestedById : r.clientId) === user.id && (r.status === "ready" || r.status === "rejected")).length;
+      all.filter((r) => r.makerId === user.id && r.status === "pending" && !r.approval).length +
+      all.filter((r) => r.clientId === user.id && (r.approval || r.status === "ready" || (r.status === "rejected" && !r.parentId))).length;
     // oferty czekające na decyzję zamawiającego
     const mineOpen = all.filter((r) => r.clientId === user.id && r.status === "open").map((r) => r.id);
     if (mineOpen.length) pending += Object.values(await offerCounts(mineOpen)).reduce((a, b) => a + b, 0);

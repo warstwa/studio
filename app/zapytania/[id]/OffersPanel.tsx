@@ -22,8 +22,22 @@ export default function OffersPanel({
 }) {
   const [state, action] = useActionState(acceptOfferAction, undefined);
   const [sort, setSort] = useState<Sort>("fit");
-  const [confirm, setConfirm] = useState<string | null>(null);
+  // podział: ile sztuk przydzielamy każdemu drukarzowi (0 = nie wybrano)
+  const [alloc, setAlloc] = useState<Record<string, number>>({});
   const live = offers.filter((o) => o.status === "pending");
+  const total = r.quantity;
+  const cap = (o: Offer) => Math.min(o.quantity ?? total, total);
+  const assigned = Object.values(alloc).reduce((a, b) => a + b, 0);
+  const unitPrice = (o: Offer) => o.price / (o.quantity ?? total);
+  const cost = live.reduce((s, o) => s + (alloc[o.makerId] ? Math.round(unitPrice(o) * alloc[o.makerId]) : 0), 0);
+  const toggle = (o: Offer) =>
+    setAlloc((a) => {
+      const n = { ...a };
+      if (n[o.makerId]) delete n[o.makerId];
+      else n[o.makerId] = Math.max(1, Math.min(cap(o), total - assigned)) || cap(o);
+      return n;
+    });
+  const picks = Object.entries(alloc).filter(([, q]) => q > 0);
   const best = {
     price: Math.min(...live.map((o) => o.price)),
     eta: live.map((o) => o.eta).sort()[0],
@@ -74,7 +88,7 @@ export default function OffersPanel({
                   </div>
                   <div className="offer-nums">
                     <div>
-                      <span className="mono dim">Cena</span>
+                      <span className="mono dim">Cena{o.quantity && o.quantity < r.quantity ? ` · za ${o.quantity} szt.` : ""}</span>
                       <b>{o.price.toLocaleString("pl-PL")} zł</b>
                       {o.price === best.price && live.length > 1 && <span className="tag-fit">najtańsza</span>}
                     </div>
@@ -87,23 +101,45 @@ export default function OffersPanel({
                   </div>
                   {o.note && <p className="offer-note">{o.note}</p>}
                   {f && f.reasons.length > 0 && <div className="fit-why">{f.reasons.slice(0, 3).join(" · ")}</div>}
-                  <form action={action} className="row" style={{ justifyContent: "flex-end" }}>
-                    <input type="hidden" name="id" value={r.id} />
-                    <input type="hidden" name="makerId" value={o.makerId} />
-                    {confirm === o.makerId ? (
-                      <>
-                        <span className="muted" style={{ fontSize: 14 }}>Pozostałe oferty zostaną odrzucone.</span>
-                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setConfirm(null)}>Wróć</button>
-                        <Submit className="btn btn-primary btn-sm" pendingText="Przyjmowanie…">Potwierdzam — {o.price} zł</Submit>
-                      </>
-                    ) : (
-                      <button type="button" className="btn btn-go btn-sm" onClick={() => setConfirm(o.makerId)}>Przyjmij ofertę</button>
-                    )}
-                  </form>
+                  <div className="offer-pick">
+                    <label className="check">
+                      <input type="checkbox" checked={!!alloc[o.makerId]} onChange={() => toggle(o)} />
+                      Wybierz{o.quantity && o.quantity < total ? ` (oferuje ${o.quantity} z ${total} szt.)` : ""}
+                    </label>
+                    {alloc[o.makerId] ? (
+                      <span className="row" style={{ gap: 8 }}>
+                        <input className="input input-sm qty" type="number" min={1} max={cap(o)} value={alloc[o.makerId]} aria-label={`Sztuki dla ${u?.name}`}
+                          onChange={(e) => setAlloc((a) => ({ ...a, [o.makerId]: Math.max(1, Math.min(cap(o), Math.round(+e.target.value) || 1)) }))} />
+                        <span className="dim">szt. · {Math.round(unitPrice(o) * alloc[o.makerId])} zł</span>
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}
           </div>
+        )}
+        {live.length > 0 && (
+          <form action={action} className={`alloc-bar${assigned === total ? " ready" : ""}`}>
+            <input type="hidden" name="id" value={r.id} />
+            <input type="hidden" name="allocations" value={JSON.stringify(picks.map(([makerId, quantity]) => ({ makerId, quantity })))} />
+            <div>
+              <b>{assigned} / {total} szt.</b> przydzielone{picks.length > 1 ? ` · ${picks.length} drukarzy` : ""}
+              {assigned > 0 && <span className="dim"> · łącznie {cost.toLocaleString("pl-PL")} zł</span>}
+              <div className="hint">
+                {assigned === 0
+                  ? "Zaznacz ofertę. Możesz wybrać kilka i podzielić sztuki — każdy drukarz dostanie swoją część."
+                  : assigned < total
+                    ? `Brakuje ${total - assigned} szt. — wybierz kolejną ofertę albo zwiększ ilość.`
+                    : assigned > total
+                      ? `Za dużo o ${assigned - total} szt.`
+                      : "Gotowe. Pozostałe oferty zostaną odrzucone."}
+              </div>
+            </div>
+            <Submit className="btn btn-primary" pendingText="Przyjmowanie…" disabled={assigned !== total}>
+              {picks.length > 1 ? "Przyjmij i podziel zamówienie" : "Przyjmij ofertę"}
+            </Submit>
+          </form>
         )}
         {state?.error && <div className="alert" role="alert" style={{ marginTop: 12 }}>{state.error}</div>}
       </div>

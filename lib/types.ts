@@ -44,6 +44,10 @@ export type RequestStatus =
 export type EventType =
   | "published"
   | "reviewed"
+  | "step_proposed"
+  | "step_approved"
+  | "step_rejected"
+  | "split"
   | "offer"
   | "offer_accepted"
   | "created"
@@ -101,6 +105,12 @@ export interface PrintRequest {
   /** drukarze wskazani przez dopasowanie (best fit) w chwili publikacji */
   invited?: string[];
   acceptedOfferId?: string;
+  /** krok zgłoszony przez drukarza, czekający na akceptację zamawiającego */
+  approval?: Approval;
+  /** część zamówienia przydzielona przy podziale ofert (zamiast prośby o pomoc) */
+  split?: boolean;
+  /** łączna liczba sztuk zamówienia, gdy zostało podzielone między drukarzy */
+  orderQuantity?: number;
   events: RequestEvent[];
   createdAt: number;
   updatedAt: number;
@@ -145,10 +155,22 @@ export interface SlicerSummary {
   filaments: { label: string; color: string; material: string; grams: number }[];
 }
 
+export interface Approval {
+  to: RequestStatus; // accepted | printing | ready
+  by: string;
+  at: number;
+  note?: string;
+  quote?: number;
+  eta?: string;
+  images?: Attachment[];
+}
+
 export interface Offer {
   id: string;
   requestId: string;
   makerId: string;
+  /** ile sztuk drukarz może wydrukować (brak = całość) */
+  quantity?: number;
   price: number;
   eta: string; // YYYY-MM-DD
   note?: string;

@@ -19,7 +19,15 @@ Każda droga tworzy **szkic** (`/zamow/[id]`), gdzie uzupełnia się termin, bud
 - **best fit** (`lib/match.ts`) liczy dopasowanie drukarzy (materiały, wielokolor, rozmiar stołu, termin,
   dostępność, oceny); trzech najlepszych dostaje zaproszenie i widzi zlecenie jako „Polecane dla Ciebie”,
 - drukarze składają **oferty** (cena, termin, notatka) — ceny konkurencji są niejawne,
-- zamawiający porównuje oferty i przyjmuje jedną → zlecenie przechodzi do zwykłego przepływu poniżej.
+- drukarz może zaoferować tylko część sztuk; zamawiający przyjmuje jedną lub kilka ofert i **od razu dzieli
+  sztuki** — każda część ma własny przebieg, odbiór i ocenę.
+
+## Akceptacja kroków
+
+Każdy krok drukarz tylko **zgłasza**, a zamawiający **akceptuje** (albo odrzuca z komentarzem):
+wycena → start druku → wysyłka (ze zdjęciami) → odbiór → ocena.
+Pomocnik (prośba o pomoc) też wymaga akceptacji zamawiającego, wysyła swoją część **bezpośrednio do
+zamawiającego** i to zamawiający potwierdza odbiór i go ocenia.
 
 Zapytanie bezpośrednio do konkretnego drukarza nadal jest możliwe z jego profilu.
 

@@ -16,6 +16,10 @@ export const STATUS: Record<RequestStatus, { label: string; tone: "wait" | "go" 
 export const EVENT_LABEL: Record<EventType, string> = {
   published: "opublikował(a) zlecenie",
   reviewed: "ocenił(a) wydruk",
+  step_proposed: "zgłosił(a) do akceptacji",
+  step_approved: "zaakceptował(a)",
+  step_rejected: "nie zaakceptował(a)",
+  split: "podzielił(a) zamówienie",
   offer: "złożył(a) ofertę",
   offer_accepted: "przyjął/przyjęła ofertę",
   created: "utworzył(a) zapytanie",
@@ -73,3 +77,10 @@ export function bytes(n: number) {
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
   return `${(n / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
 }
+
+/** Opis kroku, który drukarz zgłasza do akceptacji. */
+export const STEP_LABEL: Record<string, string> = {
+  accepted: "przyjęcie zlecenia z wyceną",
+  printing: "rozpoczęcie druku",
+  ready: "wysyłkę / gotowość do odbioru",
+};

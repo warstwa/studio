@@ -2,6 +2,7 @@
 import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  approveStepAction,
   advanceAction,
   offerAction,
   withdrawOfferAction,
@@ -12,6 +13,9 @@ import {
   type FormState,
 } from "@/app/actions";
 import Submit from "@/components/Submit";
+import ImageAttach from "@/components/ImageAttach";
+import Gallery from "@/components/Gallery";
+import { STEP_LABEL } from "@/lib/format";
 import type { Offer, PrintRequest, PublicUser } from "@/lib/types";
 
 type Helper = PublicUser & { involved: boolean };
@@ -33,6 +37,10 @@ export default function Actions({
   openChildren,
   viewerIsMaker = false,
   myOffer = null,
+  isClient = false,
+  makerName = "Drukarz",
+  blob = false,
+  userId = "",
 }: {
   r: PrintRequest;
   isMaker: boolean;
@@ -42,17 +50,26 @@ export default function Actions({
   openChildren: number;
   viewerIsMaker?: boolean;
   myOffer?: Offer | null;
+  isClient?: boolean;
+  makerName?: string;
+  blob?: boolean;
+  userId?: string;
 }) {
   if (r.status === "open") {
     if (isOwner) return <OwnerOpen r={r} />;
     if (viewerIsMaker) return <OfferForm r={r} mine={myOffer} />;
     return <Info r={r} isMaker={false} />;
   }
+  // krok zgłoszony przez drukarza czeka na zamawiającego
+  if (r.approval) {
+    if (isClient) return <Approve r={r} makerName={makerName} />;
+    if (isMaker) return <Waiting r={r} />;
+  }
   if (isMaker && (r.status === "pending" || r.status === "help_requested"))
     return <Decide r={r} helpers={helpers} openChildren={openChildren} />;
   if (isMaker && (r.status === "accepted" || r.status === "printing"))
-    return <Progress r={r} helpers={helpers} />;
-  if (isOwner && r.status === "ready") return <Complete r={r} />;
+    return <Progress r={r} helpers={helpers} blob={blob} userId={userId} />;
+  if (isClient && r.status === "ready") return <Complete r={r} />;
   if (isOwner && r.status === "rejected" && !r.parentId) return <Reassign r={r} makers={reassignTo} />;
   if (isOwner && (r.status === "pending" || r.status === "help_requested")) return <Cancel r={r} />;
   return <Info r={r} isMaker={isMaker} />;
@@ -89,7 +106,7 @@ function Decide({ r, helpers, openChildren }: { r: PrintRequest; helpers: Helper
           </p>
         )}
         <div className="decide-choices">
-          <ChoiceBtn kind="go" on={choice === "accept"} onClick={() => setChoice("accept")} title={waiting ? "Przyjmij samodzielnie" : "Akceptuj"} sub="Podaj wycenę i termin">
+          <ChoiceBtn kind="go" on={choice === "accept"} onClick={() => setChoice("accept")} title={waiting ? "Przyjmij samodzielnie" : "Akceptuj"} sub="Wycena i termin — do akceptacji klienta">
             <path d="M3 9l4 4 8-8" />
           </ChoiceBtn>
           <ChoiceBtn kind="help" on={choice === "help"} onClick={() => setChoice("help")} title="Poproś o pomoc" sub="Utwórz zapytanie do innego drukarza">
@@ -107,7 +124,7 @@ function Decide({ r, helpers, openChildren }: { r: PrintRequest; helpers: Helper
                 <div className="form-grid">
                   <div className="field">
                     <label htmlFor="quote">Wycena (zł)</label>
-                    <input className="input" id="quote" name="quote" type="number" min={0} placeholder={r.budget ? String(r.budget) : "np. 120"} />
+                    <input className="input" id="quote" name="quote" type="number" min={1} required placeholder={r.budget ? String(r.budget) : "np. 120"} />
                   </div>
                   <div className="field">
                     <label htmlFor="eta">Gotowe do</label>
@@ -115,7 +132,8 @@ function Decide({ r, helpers, openChildren }: { r: PrintRequest; helpers: Helper
                   </div>
                 </div>
                 <textarea className="textarea" name="note" placeholder="Wiadomość do zamawiającego (opcjonalnie)" style={{ minHeight: 80 }} />
-                <Submit className="btn btn-go" pendingText="Zapisywanie…">Potwierdź akceptację</Submit>
+                <Submit className="btn btn-go" pendingText="Wysyłanie…">Wyślij wycenę do akceptacji</Submit>
+                <p className="hint">Zlecenie ruszy, gdy zamawiający zaakceptuje wycenę.</p>
               </div>
             )}
           </div>
@@ -199,13 +217,14 @@ function ChoiceBtn({
 
 /* ───────── realizacja ───────── */
 
-function Progress({ r, helpers }: { r: PrintRequest; helpers: Helper[] }) {
+function Progress({ r, helpers, blob, userId }: { r: PrintRequest; helpers: Helper[]; blob: boolean; userId: string }) {
   const [state, action] = useActionState(advanceAction, undefined);
   const [helpState, helpAction] = useActionState(decideAction, undefined);
   const [showHelp, setShowHelp] = useState(false);
-  const toast = useToast(state, r.status === "printing" ? "Rozpoczęto druk" : "Oznaczono jako gotowe");
+  const toast = useToast(state, "Zgłoszono do akceptacji zamawiającego");
+  const [busy, setBusy] = useState(false);
   const helpToast = useToast(helpState, "Prośba o pomoc wysłana");
-  const next = r.status === "accepted" ? "Rozpocznij druk" : "Oznacz jako gotowe / wysłane";
+  const next = r.status === "accepted" ? "Zgłoś start druku" : "Zgłoś wysyłkę do zamawiającego";
   return (
     <div className="panel">
       {toast}
@@ -217,10 +236,14 @@ function Progress({ r, helpers }: { r: PrintRequest; helpers: Helper[] }) {
       <div className="panel-body decide">
         <form action={action} className="decide">
           <input type="hidden" name="id" value={r.id} />
-          {r.status === "printing" && (
-            <textarea className="textarea" name="note" placeholder="Informacja dla zamawiającego, np. numer przesyłki" style={{ minHeight: 70 }} />
+          {r.parentId && (
+            <div className="banner">Swoją część wysyłasz bezpośrednio do zamawiającego{r.city ? ` (${r.city}${r.delivery === "pickup" ? ", odbiór osobisty" : ""})` : ""}.</div>
           )}
-          <Submit className="btn btn-primary" pendingText="Zapisywanie…">{next}</Submit>
+          <textarea className="textarea" name="note" style={{ minHeight: 70 }}
+            placeholder={r.status === "printing" ? "Numer przesyłki, sposób dostawy…" : "Informacja dla zamawiającego (opcjonalnie)"} />
+          <ImageAttach name="images" blob={blob} userId={userId} max={8} label={r.status === "printing" ? "Zdjęcia gotowego wydruku" : "Zdjęcia (opcjonalnie)"} onBusy={setBusy} />
+          <Submit className="btn btn-primary" pendingText="Wysyłanie…" disabled={busy}>{next}</Submit>
+          <p className="hint">Każdy krok akceptuje zamawiający.</p>
           {state?.error && <div className="alert" role="alert">{state.error}</div>}
         </form>
         <button type="button" className="btn btn-help" onClick={() => setShowHelp(!showHelp)} aria-expanded={showHelp}>
@@ -333,6 +356,73 @@ function Cancel({ r }: { r: PrintRequest }) {
   );
 }
 
+/* ───────── akceptacja kroków przez zamawiającego ───────── */
+
+function Approve({ r, makerName }: { r: PrintRequest; makerName: string }) {
+  const [state, action] = useActionState(approveStepAction, undefined);
+  const [rejecting, setRejecting] = useState(false);
+  const a = r.approval!;
+  const toast = useToast(state, "Zapisano decyzję");
+  return (
+    <div className="panel approval">
+      {toast}
+      <div className="panel-head">
+        <span className="mono">Do Twojej akceptacji</span>
+        <span className="mono dim">{r.code}</span>
+      </div>
+      <div className="panel-body decide">
+        <p style={{ fontSize: 15 }}>
+          <b>{makerName}</b> zgłasza {STEP_LABEL[a.to] ?? a.to}.
+        </p>
+        {a.to === "accepted" && (
+          <div className="offer-mine">
+            <div><span className="mono dim">Wycena</span><b>{a.quote?.toLocaleString("pl-PL")} zł</b></div>
+            <div><span className="mono dim">Gotowe do</span><b>{a.eta ? new Date(a.eta + "T12:00").toLocaleDateString("pl-PL", { day: "numeric", month: "short" }) : "—"}</b></div>
+          </div>
+        )}
+        {a.note && <p className="offer-note">{a.note}</p>}
+        {a.images && a.images.length > 0 && <Gallery images={a.images} variant="strip" />}
+        <form action={action} className="decide">
+          <input type="hidden" name="id" value={r.id} />
+          {rejecting ? (
+            <>
+              <input type="hidden" name="decision" value="reject" />
+              <textarea className="textarea" name="note" style={{ minHeight: 80 }} placeholder="Co trzeba poprawić? Drukarz zobaczy Twój komentarz." />
+              <div className="row">
+                <Submit className="btn btn-stop" pendingText="…">Nie akceptuję</Submit>
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setRejecting(false)}>Wróć</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <input type="hidden" name="decision" value="approve" />
+              <Submit className="btn btn-go" pendingText="Zapisywanie…">Akceptuję</Submit>
+              <button type="button" className="btn btn-ghost" onClick={() => setRejecting(true)}>Nie akceptuję…</button>
+            </>
+          )}
+          {state?.error && <div className="alert" role="alert">{state.error}</div>}
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function Waiting({ r }: { r: PrintRequest }) {
+  return (
+    <div className="panel">
+      <div className="panel-head"><span className="mono">Czeka na zamawiającego</span><span className="mono dim">{r.code}</span></div>
+      <div className="panel-body decide">
+        <div className="offers-empty">
+          <span className="pulse" />
+          <p className="muted" style={{ fontSize: 14 }}>
+            Zgłosiłeś {STEP_LABEL[r.approval!.to] ?? "krok"}. Zamawiający musi to zaakceptować — dostaniesz odpowiedź w historii zlecenia.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ───────── giełda: oferta drukarza ───────── */
 
 function OfferForm({ r, mine }: { r: PrintRequest; mine: Offer | null }) {
@@ -359,7 +449,7 @@ function OfferForm({ r, mine }: { r: PrintRequest; mine: Offer | null }) {
         ) : mine?.status === "pending" && !edit ? (
           <>
             <div className="offer-mine">
-              <div><span className="mono dim">Cena</span><b>{mine.price.toLocaleString("pl-PL")} zł</b></div>
+              <div><span className="mono dim">Cena{mine.quantity ? ` · ${mine.quantity} szt.` : ""}</span><b>{mine.price.toLocaleString("pl-PL")} zł</b></div>
               <div><span className="mono dim">Gotowe do</span><b>{new Date(mine.eta + "T12:00").toLocaleDateString("pl-PL", { day: "numeric", month: "short" })}</b></div>
             </div>
             {mine.note && <p className="offer-note">{mine.note}</p>}
@@ -378,7 +468,7 @@ function OfferForm({ r, mine }: { r: PrintRequest; mine: Offer | null }) {
             <input type="hidden" name="id" value={r.id} />
             <div className="form-grid">
               <div className="field">
-                <label htmlFor="price">Cena (zł)</label>
+                <label htmlFor="price">Cena za Twoje sztuki (zł)</label>
                 <input className="input" id="price" name="price" type="number" min={1} step="0.01" required defaultValue={mine?.price}
                   placeholder={r.budget ? `budżet ${r.budget}` : "np. 120"} />
               </div>
@@ -386,6 +476,11 @@ function OfferForm({ r, mine }: { r: PrintRequest; mine: Offer | null }) {
                 <label htmlFor="eta">Gotowe do</label>
                 <input className="input" id="eta" name="eta" type="date" min={minDate} required defaultValue={mine?.eta ?? r.deadline} />
               </div>
+            </div>
+            <div className="field">
+              <label htmlFor="o-qty">Ile sztuk wydrukujesz?</label>
+              <input className="input" id="o-qty" name="quantity" type="number" min={1} max={r.quantity} defaultValue={mine?.quantity ?? r.quantity} />
+              <span className="hint">Zamówienie ma {r.quantity} szt. Możesz zaoferować część — zamawiający podzieli zlecenie między drukarzy.</span>
             </div>
             <textarea className="textarea" name="note" defaultValue={mine?.note} style={{ minHeight: 90 }}
               placeholder="Jak wydrukujesz zlecenie: maszyna, materiał, wysyłka, pytania do zamawiającego…" />
@@ -434,7 +529,7 @@ function Info({ r, isMaker }: { r: PrintRequest; isMaker: boolean }) {
     help_requested: "Drukarz szuka pomocy innego drukarza.",
     accepted: "Zlecenie przyjęte — wkrótce ruszy druk.",
     printing: "Trwa druk.",
-    ready: isMaker ? "Czekasz na potwierdzenie odbioru." : "Wydruk gotowy.",
+    ready: isMaker ? "Wysłane — czekasz na potwierdzenie odbioru przez zamawiającego." : "Wydruk wysłany.",
     completed: "Zlecenie zakończone.",
     rejected: "Zapytanie zostało odrzucone.",
     cancelled: "Zapytanie anulowane.",

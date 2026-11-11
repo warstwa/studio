@@ -290,7 +290,17 @@ export async function listRequests() {
 
 export async function canView(r: PrintRequest, userId: string) {
   if (r.status === "draft") return r.clientId === userId;
-  if (r.status === "open" && r.clientId !== userId) return !!(await getUser(userId))?.maker;
+  if (r.clientId === userId || r.makerId === userId || r.requestedById === userId) return true;
+  // zlecenie na giełdzie może obejrzeć każdy zalogowany (ofertę złoży tylko drukarz)
+  if (r.status === "open") return true;
+  const root = r.rootId === r.id ? r : await getRequest(r.rootId);
+  if (root?.participants.includes(userId)) return true;
+  // drukarz, który składał ofertę, widzi rozstrzygnięcie (np. „wybrano inną ofertę”)
+  return !!(await getOffer(r.rootId, userId));
+}
+
+/** Czy użytkownik bierze udział w realizacji (a nie tylko oglądał / składał ofertę). */
+export async function isParticipant(r: PrintRequest, userId: string) {
   if (r.clientId === userId || r.makerId === userId || r.requestedById === userId) return true;
   const root = r.rootId === r.id ? r : await getRequest(r.rootId);
   return !!root?.participants.includes(userId);
@@ -376,33 +386,73 @@ export async function acceptRequest(id: string, user: User, quote?: number, eta?
   const r = await load(id);
   assertMaker(r, user);
   assertStatus(r, "pending", "help_requested");
-  const wasHelpRequested = r.status === "help_requested";
-  r.status = "accepted";
-  if (quote) r.quote = quote;
-  if (eta) r.eta = eta;
-  pushEvent(r, user.id, "accepted", note);
-  await saveRequest(r);
-
-  if (wasHelpRequested) {
+  if (r.approval) throw new DomainError("Wycena czeka już na akceptację zamawiającego.");
+  if (!quote || quote <= 0) throw new DomainError("Podaj wycenę — zamawiający musi ją zaakceptować.");
+  if (r.status === "help_requested") {
     // przyjęcie samodzielne — wycofaj otwarte prośby o pomoc
     for (const c of await openChildren(r.id)) {
       c.status = "cancelled";
+      c.approval = undefined;
       pushEvent(c, user.id, "cancelled", "Zlecenie realizowane samodzielnie.");
       await saveRequest(c);
     }
+    r.status = "pending";
   }
+  r.approval = { to: "accepted", by: user.id, at: Date.now(), note: note?.trim() || undefined, quote, eta };
+  pushEvent(r, user.id, "step_proposed", `Wycena ${quote} zł${eta ? ` · gotowe do ${eta}` : ""}${note ? ` — ${note}` : ""}`);
+  await saveRequest(r);
+  return r;
+}
 
-  if (r.parentId) {
+/** Zamawiający akceptuje krok zgłoszony przez drukarza (wycena, start druku, wysyłka). */
+export async function approveStep(id: string, user: User) {
+  const r = await load(id);
+  if (r.clientId !== user.id) throw new DomainError("Kroki akceptuje zamawiający.");
+  const a = r.approval;
+  if (!a) throw new DomainError("Nic nie czeka na akceptację — odśwież stronę.");
+  r.approval = undefined;
+  r.status = a.to;
+  if (a.to === "accepted") {
+    if (a.quote) r.quote = a.quote;
+    if (a.eta) r.eta = a.eta;
+  }
+  const what = a.to === "accepted" ? `wycenę${a.quote ? ` ${a.quote} zł` : ""}` : a.to === "printing" ? "start druku" : "wysyłkę";
+  pushEvent(r, user.id, "step_approved", `Zaakceptowano ${what}.`);
+  await saveRequest(r);
+
+  // pomocnik zatwierdzony przez zamawiającego
+  if (a.to === "accepted" && r.parentId) {
     const p = await getRequest(r.parentId);
     if (p) {
-      pushEvent(p, user.id, "help_accepted", note || `Przyjęto ${r.quantity} szt.`, r.id);
-      if (p.status === "help_requested") {
-        p.status = "accepted";
-        pushEvent(p, p.makerId, "accepted", "Realizacja wspólna.");
-      }
+      pushEvent(p, r.makerId, "help_accepted", `${r.quantity} szt. — zatwierdzone przez zamawiającego`, r.id);
+      if (p.status === "help_requested") p.status = "pending"; // drukarz główny wycenia swoją część
       await saveRequest(p);
     }
   }
+  return r;
+}
+
+/** Zamawiający nie akceptuje zgłoszonego kroku (z komentarzem). */
+export async function rejectStep(id: string, user: User, note?: string) {
+  const r = await load(id);
+  if (r.clientId !== user.id) throw new DomainError("Kroki akceptuje zamawiający.");
+  const a = r.approval;
+  if (!a) throw new DomainError("Nic nie czeka na akceptację — odśwież stronę.");
+  r.approval = undefined;
+  if (a.to === "accepted" && r.parentId && !r.split) {
+    // zamawiający nie chce tego pomocnika
+    r.status = "cancelled";
+    pushEvent(r, user.id, "step_rejected", note || "Zamawiający nie zaakceptował pomocnika.");
+    await saveRequest(r);
+    const p = await getRequest(r.parentId);
+    if (p) {
+      pushEvent(p, user.id, "help_rejected", note || "Zamawiający nie zaakceptował pomocnika.", r.id);
+      await saveRequest(p);
+    }
+    return r;
+  }
+  pushEvent(r, user.id, "step_rejected", note || undefined);
+  await saveRequest(r);
   return r;
 }
 
@@ -463,6 +513,10 @@ export async function askForHelp(
     participants: [],
     title: r.title.startsWith("Pomoc: ") ? r.title : `Pomoc: ${r.title}`,
     description: note?.trim() ? `${note.trim()}\n\n— Opis oryginalny —\n${r.description}` : r.description,
+    files: r.files,
+    slicer: r.slicer,
+    delivery: r.delivery,
+    city: r.city,
     material: r.material,
     color: r.color,
     quantity: qty,
@@ -489,22 +543,23 @@ export async function askForHelp(
 
 const FLOW: Partial<Record<RequestStatus, RequestStatus>> = { accepted: "printing", printing: "ready" };
 
-export async function advanceRequest(id: string, user: User, note?: string) {
+export async function advanceRequest(id: string, user: User, note?: string, images: Attachment[] = []) {
   const r = await load(id);
   assertMaker(r, user);
   const next = FLOW[r.status];
   if (!next) throw new DomainError("Nie można przejść do kolejnego etapu.");
-  r.status = next;
-  pushEvent(r, user.id, next as EventType, note);
+  if (r.approval) throw new DomainError("Poprzedni krok czeka jeszcze na akceptację zamawiającego.");
+  r.approval = { to: next, by: user.id, at: Date.now(), note: note?.trim() || undefined, images: images.slice(0, 8) };
+  pushEvent(r, user.id, "step_proposed", next === "printing" ? `Start druku${note ? ` — ${note}` : ""}` : `Wysyłka do zamawiającego${note ? ` — ${note}` : ""}`);
+  if (images.length) r.events[r.events.length - 1].images = images.slice(0, 8);
   await saveRequest(r);
   return r;
 }
 
-/** Zamawiający (lub drukarz, który prosił o pomoc) potwierdza odbiór. */
+/** Zamawiający potwierdza odbiór — także części od pomocnika (wysyła ją prosto do zamawiającego). */
 export async function completeRequest(id: string, user: User) {
   const r = await load(id);
-  const owner = r.parentId ? r.requestedById : r.clientId;
-  if (owner !== user.id) throw new DomainError("Tylko zamawiający może potwierdzić odbiór.");
+  if (r.clientId !== user.id) throw new DomainError("Tylko zamawiający może potwierdzić odbiór.");
   assertStatus(r, "ready");
   r.status = "completed";
   pushEvent(r, user.id, "completed");
@@ -706,7 +761,7 @@ export async function listMakerOffers(makerId: string) {
   return offers.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export async function submitOffer(requestId: string, maker: User, input: { price: number; eta: string; note?: string }) {
+export async function submitOffer(requestId: string, maker: User, input: { price: number; eta: string; note?: string; quantity?: number }) {
   const r = await load(requestId);
   if (!maker.maker) throw new DomainError("Oferty mogą składać tylko drukarze. Uzupełnij profil drukarza.");
   if (r.clientId === maker.id) throw new DomainError("Nie możesz składać oferty na własne zlecenie.");
@@ -720,6 +775,7 @@ export async function submitOffer(requestId: string, maker: User, input: { price
     id: prev?.id ?? `o_${uid(8)}`,
     requestId,
     makerId: maker.id,
+    quantity: input.quantity && input.quantity < r.quantity ? Math.max(1, Math.round(input.quantity)) : undefined,
     price: Math.round(input.price * 100) / 100,
     eta: input.eta,
     note: input.note?.trim().slice(0, 1000) || undefined,
@@ -729,7 +785,7 @@ export async function submitOffer(requestId: string, maker: User, input: { price
   };
   await saveOffer(o);
   if (!prev || prev.status === "withdrawn") {
-    pushEvent(r, maker.id, "offer", `${o.price} zł · gotowe do ${o.eta}`);
+    pushEvent(r, maker.id, "offer", `${o.price} zł${o.quantity ? ` za ${o.quantity} szt.` : ""} · gotowe do ${o.eta}`);
     await saveRequest(r);
   }
   return o;
@@ -741,27 +797,86 @@ export async function withdrawOffer(requestId: string, maker: User) {
   await saveOffer({ ...o, status: "withdrawn" });
 }
 
-/** Zamawiający wybiera ofertę → zlecenie trafia do drukarza jako przyjęte (dalej zwykły przepływ). */
-export async function acceptOffer(requestId: string, user: User, makerId: string) {
+/**
+ * Zamawiający przyjmuje jedną albo kilka ofert i od razu dzieli sztuki między drukarzy.
+ * Największa część zostaje w zleceniu głównym, pozostałe stają się osobnymi częściami
+ * (każda z własnym przebiegiem, odbiorem i oceną).
+ */
+export async function acceptOffers(requestId: string, user: User, allocations: { makerId: string; quantity: number }[]) {
   const r = await load(requestId);
   assertOwner(r, user);
   assertStatus(r, "open");
   const offers = await listOffers(requestId);
-  const o = offers.find((x) => x.makerId === makerId);
-  if (!o || o.status !== "pending") throw new DomainError("Ta oferta nie jest już aktualna.");
-  const maker = await getUser(makerId);
-  if (!maker?.maker) throw new DomainError("Drukarz nie istnieje.");
-  for (const x of offers)
-    if (x.status === "pending") await saveOffer({ ...x, status: x.makerId === makerId ? "accepted" : "declined" });
-  r.makerId = makerId;
-  r.quote = o.price;
-  r.eta = o.eta;
-  r.acceptedOfferId = o.id;
+  const picks = allocations
+    .map((a) => ({ ...a, quantity: Math.round(a.quantity), offer: offers.find((o) => o.makerId === a.makerId) }))
+    .filter((a) => a.quantity > 0);
+  if (!picks.length) throw new DomainError("Wybierz co najmniej jedną ofertę.");
+  for (const p of picks) {
+    if (!p.offer || p.offer.status !== "pending") throw new DomainError("Któraś z ofert nie jest już aktualna — odśwież stronę.");
+    const cap = p.offer.quantity ?? r.quantity;
+    if (p.quantity > cap) throw new DomainError(`Drukarz zaoferował maksymalnie ${cap} szt.`);
+  }
+  if (new Set(picks.map((p) => p.makerId)).size !== picks.length) throw new DomainError("Każdego drukarza wybierz raz.");
+  const total = picks.reduce((s, p) => s + p.quantity, 0);
+  if (total !== r.quantity) throw new DomainError(`Przydziel dokładnie ${r.quantity} szt. (teraz: ${total}).`);
+
+  const price = (p: (typeof picks)[number]) => Math.round((p.offer!.price * p.quantity) / (p.offer!.quantity ?? r.quantity));
+  picks.sort((a, b) => b.quantity - a.quantity);
+  const [main, ...rest] = picks;
+  const makers = await userMap(picks.map((p) => p.makerId));
+
+  for (const o of offers)
+    if (o.status === "pending") await saveOffer({ ...o, status: picks.some((p) => p.makerId === o.makerId) ? "accepted" : "declined" });
+
+  const total0 = r.quantity;
+  r.makerId = main.makerId;
+  r.quantity = main.quantity;
+  if (rest.length) r.orderQuantity = total0;
+  r.quote = price(main);
+  r.eta = main.offer!.eta;
+  r.acceptedOfferId = main.offer!.id;
   r.status = "accepted";
-  if (!r.participants.includes(makerId)) r.participants.push(makerId);
-  pushEvent(r, user.id, "offer_accepted", `${maker.name} · ${o.price} zł · do ${o.eta}`);
+  for (const p of picks) if (!r.participants.includes(p.makerId)) r.participants.push(p.makerId);
+  pushEvent(r, user.id, "offer_accepted", `${makers[main.makerId]?.name} · ${main.quantity} szt. · ${r.quote} zł · do ${r.eta}`);
+
+  for (const p of rest) {
+    const cid = `r_${uid(10)}`;
+    const part: PrintRequest = {
+      ...r,
+      id: cid,
+      code: await nextCode(),
+      parentId: r.id,
+      rootId: r.id,
+      split: true,
+      requestedById: undefined,
+      makerId: p.makerId,
+      participants: [],
+      title: `Część: ${r.title}`,
+      quantity: p.quantity,
+      orderQuantity: total0,
+      quote: price(p),
+      eta: p.offer!.eta,
+      acceptedOfferId: p.offer!.id,
+      invited: undefined,
+      approval: undefined,
+      status: "accepted",
+      events: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    pushEvent(part, user.id, "offer_accepted", `${makers[p.makerId]?.name} · ${p.quantity} szt. z ${total0} · ${part.quote} zł · do ${part.eta}`);
+    await kv().set(`req:${cid}`, part);
+    await kv().sadd("reqs", cid);
+    pushEvent(r, user.id, "split", `${makers[p.makerId]?.name}: ${p.quantity} szt. (${part.code})`, cid);
+  }
   await saveRequest(r);
   return r;
+}
+
+/** Zgodność wstecz: przyjęcie jednej oferty na całość. */
+export async function acceptOffer(requestId: string, user: User, makerId: string) {
+  const r = await load(requestId);
+  return acceptOffers(requestId, user, [{ makerId, quantity: r.quantity }]);
 }
 
 /* ───────── przykładowe zlecenia na giełdzie (demo) ───────── */
@@ -840,7 +955,7 @@ export async function submitReview(
   input: { quality: number; communication: number; timeliness: number; text: string; photos: Attachment[] },
 ) {
   const r = await load(requestId);
-  if (r.parentId || r.clientId !== user.id) throw new DomainError("Ocenić może tylko zamawiający.");
+  if (r.clientId !== user.id) throw new DomainError("Ocenić może tylko zamawiający.");
   assertStatus(r, "completed");
   if (await getReview(requestId)) throw new DomainError("To zlecenie zostało już ocenione.");
   const q = clamp5(input.quality), c = clamp5(input.communication), t = clamp5(input.timeliness);

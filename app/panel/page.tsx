@@ -18,16 +18,19 @@ function tabsFor(me: User, all: PrintRequest[], offered: Set<string>) {
   const tabs: { id: string; label: string; items: PrintRequest[] }[] = [];
   if (me.maker) {
     tabs.push(
-      { id: "do-decyzji", label: "Do decyzji", items: all.filter((r) => r.makerId === me.id && r.status === "pending") },
+      { id: "do-decyzji", label: "Do decyzji", items: all.filter((r) => r.makerId === me.id && r.status === "pending" && !r.approval) },
       {
         id: "realizacja",
         label: "W realizacji",
-        items: all.filter((r) => r.makerId === me.id && ["accepted", "printing", "help_requested", "ready"].includes(r.status)),
+        items: all.filter((r) => r.makerId === me.id && (["accepted", "printing", "help_requested", "ready"].includes(r.status) || (r.status === "pending" && !!r.approval))),
       },
       { id: "oferty", label: "Moje oferty", items: all.filter((r) => offered.has(r.id) && r.status === "open") },
       { id: "pomoc", label: "Moje prośby o pomoc", items: all.filter((r) => r.requestedById === me.id) },
     );
   }
+  // każdy krok akceptuje zamawiający — także części od pomocników i z podziału
+  const toApprove = all.filter((r) => r.clientId === me.id && (r.approval || r.status === "ready"));
+  if (toApprove.length) tabs.unshift({ id: "akceptacja", label: "Do akceptacji", items: toApprove });
   tabs.push({ id: "zamowienia", label: "Moje zamówienia", items: mine });
   if (me.maker)
     tabs.push({ id: "archiwum", label: "Archiwum", items: all.filter((r) => r.makerId === me.id && FINAL.includes(r.status)) });
@@ -179,7 +182,7 @@ function Row({ r, me, people, i, offers, myOffer }: { r: PrintRequest; me: User;
           </>
         )}
       </div>
-      <div><StatusPill status={r.status} /></div>
+      <div>{r.approval ? <span className="pill wait">{r.clientId === me.id ? "Do akceptacji" : "Czeka na klienta"}</span> : <StatusPill status={r.status} />}</div>
       <span className="req-when mono dim" style={{ textAlign: "right" }}>{ago(r.updatedAt)}</span>
     </Link>
   );

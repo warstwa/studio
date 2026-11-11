@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { currentUser } from "@/lib/auth";
-import { canView, getRequest, getReview, getTree, listMakers, listOffers, toPublic, userMap } from "@/lib/data";
+import { canView, getOffer, getRequest, getReview, getTree, isParticipant, listMakers, listOffers, toPublic, userMap } from "@/lib/data";
 import { EVENT_LABEL, STATUS, ago, date, zl } from "@/lib/format";
 import type { PrintRequest, PublicUser, RequestEvent } from "@/lib/types";
 import { Avatar, StatusPill } from "@/components/ui";
@@ -54,6 +54,30 @@ export default async function RequestPage({
   if (!r || !(await canView(r, me.id))) notFound();
   if (r.status === "draft") redirect(`/zamow/${r.id}`);
 
+  // drukarz, którego oferta nie została wybrana — informacja zamiast 404
+  if (r.status !== "open" && !(await isParticipant(r, me.id))) {
+    const mine = await getOffer(r.rootId, me.id);
+    return (
+      <div className="page">
+        <div className="wrap" style={{ maxWidth: 760 }}>
+          <div className="crumbs mono"><Link href="/zlecenia">Zlecenia</Link> / <span>{r.code}</span></div>
+          <div className="req-hero"><span className="pill mute">Oferta nie została wybrana</span></div>
+          <h1 style={{ fontSize: "clamp(28px,3.6vw,44px)", marginBottom: 24 }}>{r.title}</h1>
+          <div className="panel">
+            <div className="panel-body decide">
+              <p style={{ fontSize: 16 }}>
+                {r.status === "cancelled" ? "Zamawiający anulował to zlecenie." : "Zamawiający wybrał inną ofertę."}
+                {mine ? ` Twoja oferta: ${mine.price} zł${mine.quantity ? ` za ${mine.quantity} szt.` : ""}, gotowe do ${date(mine.eta)}.` : ""}
+              </p>
+              <p className="muted" style={{ fontSize: 14 }}>Dziękujemy za wycenę — na giełdzie czekają kolejne zlecenia dopasowane do Twoich maszyn.</p>
+              <div className="row"><Link href="/zlecenia" className="btn btn-primary">Przeglądaj zlecenia</Link><Link href="/panel?widok=oferty" className="btn btn-ghost">Moje oferty</Link></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const tree = await getTree(r.rootId);
   const parent = r.parentId ? tree.find((t) => t.id === r.parentId) : undefined;
   const people = await userMap([
@@ -82,8 +106,8 @@ export default async function RequestPage({
   const fitById = Object.fromEntries(fits.map((f) => [f.makerId, f]));
   const offerPeople = isOpen ? await userMap(offers.map((o) => o.makerId)) : {};
   // oferty konkurencji są niejawne — drukarz widzi w historii tylko swoją
-  const review = r.status === "completed" && !r.parentId ? await getReview(r.id) : null;
-  const canReview = r.status === "completed" && !r.parentId && r.clientId === me.id && !review;
+  const review = r.status === "completed" ? await getReview(r.id) : null;
+  const canReview = r.status === "completed" && r.clientId === me.id && !review;
   const blob = blobEnabled();
   const events = r.events.filter((e) => e.type !== "offer" || owner === me.id || e.actorId === me.id);
 
@@ -98,6 +122,8 @@ export default async function RequestPage({
         </div>
         <div className="req-hero">
           <StatusPill status={r.status} />
+          {r.approval && <span className="pill wait">Czeka na akceptację klienta</span>}
+          {r.split && <span className="tag-help">Część zamówienia</span>}
           {r.parentId && <span className="tag-help">Prośba o pomoc</span>}
           <span className="mono dim">utworzono {ago(r.createdAt)}</span>
         </div>
@@ -110,12 +136,22 @@ export default async function RequestPage({
             {r.parentId && parent && (
               <div className="banner">
                 <span>
-                  <b>{people[r.requestedById!]?.name}</b> prosi o wydrukowanie {r.quantity} szt. w ramach zlecenia{" "}
+                  {r.split ? (
+                    <>Część zamówienia {r.orderQuantity ? `(${r.quantity} z ${r.orderQuantity} szt.)` : ""} przydzielona przy podziale ofert</>
+                  ) : (
+                    <><b>{people[r.requestedById!]?.name}</b> prosi o wydrukowanie {r.quantity} szt.</>
+                  )}{" "}
+                  w ramach zlecenia{" "}
                   <Link href={`/zapytania/${parent.id}`} className="mono" style={{ textDecoration: "underline" }}>
                     {parent.code}
                   </Link>{" "}
-                  dla: {people[r.clientId]?.name}.
+                  dla: {people[r.clientId]?.name}. Wysyłka bezpośrednio do zamawiającego; odbiór i ocenę tej części potwierdza zamawiający.
                 </span>
+              </div>
+            )}
+            {!r.parentId && r.orderQuantity && (
+              <div className="banner">
+                Zamówienie {r.orderQuantity} szt. podzielone między drukarzy — tutaj {r.quantity} szt. od {people[r.makerId]?.name}. Pozostałe części znajdziesz w sekcji „Realizacja wspólna”.
               </div>
             )}
             {r.status === "help_requested" && (
@@ -203,9 +239,9 @@ export default async function RequestPage({
                     <Link key={t.id} href={`/zapytania/${t.id}`} className={t.id === r.id ? "current" : ""}>
                       <span className="indent">{"└─ ".repeat(depth(t, tree))}{t.code}</span>
                       <span>
-                        {people[t.makerId]?.name} <span className="dim">· {t.quantity} szt.</span>
+                        {people[t.makerId]?.name} <span className="dim">· {t.quantity} szt.{t.split ? " · część" : t.parentId ? " · pomoc" : ""}</span>
                       </span>
-                      <StatusPill status={t.status} />
+                      {t.approval ? <span className="pill wait">Do akceptacji</span> : <StatusPill status={t.status} />}
                     </Link>
                   ))}
                 </div>
@@ -235,6 +271,10 @@ export default async function RequestPage({
               openChildren={openChildren.length}
               viewerIsMaker={!!me.maker}
               myOffer={myOffer}
+              isClient={r.clientId === me.id}
+              makerName={people[r.makerId]?.name}
+              blob={blob}
+              userId={me.id}
             />
             <div className="panel">
               <div className="panel-head"><span className="mono">Uczestnicy</span></div>

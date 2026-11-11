@@ -3213,3 +3213,44 @@ input[type="date"] {
 .review-form {
   border-color: color-mix(in srgb, #f2c14e 35%, var(--line));
 }
+
+/* ───── akceptacja kroków i podział ofert ───── */
+.approval {
+  border-color: color-mix(in srgb, var(--wait) 45%, var(--line));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--wait) 15%, transparent);
+}
+.offer-pick {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-2);
+}
+.offer-pick .qty {
+  width: 80px;
+}
+.alloc-bar {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--surface-2);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.25s;
+}
+.alloc-bar.ready {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.alloc-bar .hint {
+  margin-top: 2px;
+}

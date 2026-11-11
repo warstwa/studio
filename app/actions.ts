@@ -242,7 +242,17 @@ export async function decideAction(_: FormState, f: FormData): Promise<FormState
 export async function advanceAction(_: FormState, f: FormData): Promise<FormState> {
   const id = str(f, "id");
   const u = await requireUser(`/zapytania/${id}`);
-  return run(id, () => D.advanceRequest(id, u, str(f, "note", 1000)));
+  return run(id, () => D.advanceRequest(id, u, str(f, "note", 1000), parseImages(f.get("images"), 8)));
+}
+
+export async function approveStepAction(_: FormState, f: FormData): Promise<FormState> {
+  const id = str(f, "id");
+  const u = await requireUser(`/zapytania/${id}`);
+  const decision = str(f, "decision");
+  const res = await run(id, () => (decision === "reject" ? D.rejectStep(id, u, str(f, "note", 1000)) : D.approveStep(id, u)));
+  const r = await D.getRequest(id);
+  if (r?.parentId) revalidatePath(`/zapytania/${r.parentId}`);
+  return res;
 }
 
 export async function completeAction(_: FormState, f: FormData): Promise<FormState> {
@@ -377,7 +387,9 @@ export async function saveOrderAction(_: FormState, f: FormData): Promise<FormSt
 export async function offerAction(_: FormState, f: FormData): Promise<FormState> {
   const id = str(f, "id");
   const u = await requireUser(`/zapytania/${id}`);
-  return run(id, () => D.submitOffer(id, u, { price: num(f, "price") ?? 0, eta: str(f, "eta", 10), note: str(f, "note", 1000) }));
+  return run(id, () =>
+    D.submitOffer(id, u, { price: num(f, "price") ?? 0, eta: str(f, "eta", 10), note: str(f, "note", 1000), quantity: num(f, "quantity") }),
+  );
 }
 
 export async function withdrawOfferAction(_: FormState, f: FormData): Promise<FormState> {
@@ -389,7 +401,18 @@ export async function withdrawOfferAction(_: FormState, f: FormData): Promise<Fo
 export async function acceptOfferAction(_: FormState, f: FormData): Promise<FormState> {
   const id = str(f, "id");
   const u = await requireUser(`/zapytania/${id}`);
-  return run(id, () => D.acceptOffer(id, u, str(f, "makerId")));
+  let allocations: { makerId: string; quantity: number }[] = [];
+  try {
+    const raw = JSON.parse(String(f.get("allocations") ?? "[]"));
+    if (Array.isArray(raw)) allocations = raw.map((a) => ({ makerId: String(a.makerId), quantity: Number(a.quantity) || 0 }));
+  } catch {
+    return { error: "Nieprawidłowy podział." };
+  }
+  if (!allocations.length && f.get("makerId")) {
+    const r = await D.getRequest(id);
+    allocations = [{ makerId: str(f, "makerId"), quantity: r?.quantity ?? 0 }];
+  }
+  return run(id, () => D.acceptOffers(id, u, allocations));
 }
 
 export async function deleteOrderAction(_: FormState, f: FormData): Promise<FormState> {
