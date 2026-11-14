@@ -17,6 +17,8 @@ export default function Footer() {
           <Link href="/#jak-to-dziala">Jak to działa</Link>
           <Link href="/rejestracja">Zostań drukarzem</Link>
           <Link href="/panel">Panel</Link>
+          <Link href="/regulamin">Regulamin</Link>
+          <Link href="/polityka-prywatnosci">Prywatność</Link>
         </nav>
       </div>
     </footer>

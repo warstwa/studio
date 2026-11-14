@@ -41,7 +41,10 @@ export default function RegisterForm({ defaultRole }: { defaultRole: "client" | 
       <PasswordInput id="password2" name="password2" label="Powtórz hasło" autoComplete="new-password" />
       <label className="check">
         <input type="checkbox" name="terms" required checked={v.terms} onChange={(e) => setV({ ...v, terms: e.target.checked })} />
-        <span>Akceptuję regulamin serwisu i zasady przetwarzania danych.</span>
+        <span>
+          Akceptuję <a href="/regulamin" target="_blank" className="accent">Regulamin</a> i zapoznałem(-am) się z{" "}
+          <a href="/polityka-prywatnosci" target="_blank" className="accent">Polityką prywatności</a>.
+        </span>
       </label>
       {state?.error && <div className="alert" role="alert">{state.error}</div>}
       <Submit className="btn btn-primary btn-lg" pendingText="Tworzenie konta…">Załóż konto</Submit>

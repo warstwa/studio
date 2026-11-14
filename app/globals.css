@@ -3254,3 +3254,138 @@ input[type="date"] {
 .alloc-bar .hint {
   margin-top: 2px;
 }
+
+/* ───── dokumenty prawne ───── */
+.legal-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 48px;
+  align-items: start;
+}
+.legal-toc {
+  position: sticky;
+  top: 88px;
+  display: grid;
+  gap: 10px;
+  font-size: 14px;
+}
+.legal-toc ol {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  color: var(--dim);
+}
+.legal-toc a {
+  color: var(--muted);
+}
+.legal-toc a:hover {
+  color: var(--accent);
+}
+.legal-other {
+  display: grid;
+  gap: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.legal {
+  max-width: 760px;
+  font-size: 16px;
+  line-height: 1.7;
+  color: #d6d4ce;
+}
+.legal h2 {
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 40px 0 14px;
+  scroll-margin-top: 90px;
+}
+.legal h2:first-child {
+  margin-top: 0;
+}
+.legal ol,
+.legal ul {
+  padding-left: 22px;
+  display: grid;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.legal p {
+  margin: 0 0 12px;
+}
+.legal a {
+  color: var(--accent);
+}
+.legal b {
+  color: var(--text);
+  font-weight: 600;
+}
+.legal dl {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 10px 20px;
+  margin: 0;
+}
+.legal dt {
+  color: var(--text);
+  font-weight: 600;
+}
+.legal dd {
+  margin: 0;
+}
+.legal table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0 16px;
+  font-size: 14px;
+}
+.legal th,
+.legal td {
+  text-align: left;
+  vertical-align: top;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.legal th {
+  font: 600 12px var(--label);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.legal code {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--surface);
+}
+@media (max-width: 860px) {
+  .legal-layout {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  .legal-toc {
+    position: static;
+  }
+  .legal dl {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .legal dd {
+    margin-bottom: 10px;
+  }
+}
+@media print {
+  .nav,
+  .footer,
+  .legal-toc,
+  .banner {
+    display: none !important;
+  }
+  body,
+  .legal {
+    background: #fff;
+    color: #000;
+  }
+}

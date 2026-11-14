@@ -323,6 +323,7 @@ export default function HeroPrint() {
       const top = Math.min(layer, LAYERS - 1);
       for (let l = cachedUpTo; l <= top; l++) {
         const ring = layers[l];
+        if (!ring) continue;
         const upto = l === layer && phase === "print" ? Math.floor(pt) : PTS;
         const heat = 1 - (layer - l) / HOT; // 1 = najgorętsza
         strokeRing(ctx, ring, upto, (b) => {
@@ -335,12 +336,13 @@ export default function HeroPrint() {
       ctx.globalAlpha = 1;
 
       if (phase === "print" && layer < LAYERS) {
-        const p = layers[layer][Math.min(PTS, Math.floor(pt))];
-        drawNozzle(p.x, p.y, tSec);
+        // osłona: po zmianie rozmiaru / przebudowie kształtu punkt może chwilowo nie istnieć
+        const p = layers[layer]?.[Math.max(0, Math.min(PTS, Math.floor(pt) || 0))];
+        if (p) drawNozzle(p.x, p.y, tSec);
       } else if (phase === "hold") {
-        const p = layers[LAYERS - 1][0];
+        const p = layers[LAYERS - 1]?.[0];
         const lift = Math.min(1, phaseT * 1.5);
-        drawNozzle(p.x + lift * 30, p.y - lift * 40, tSec);
+        if (p) drawNozzle(p.x + lift * 30, p.y - lift * 40, tSec);
       }
 
       hudT += dt;
