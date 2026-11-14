@@ -1,25 +1,47 @@
 import Link from "next/link";
 import Logo from "./Logo";
 
+const COLS: [string, [string, string][]][] = [
+  ["Zamawiający", [["Złóż zamówienie", "/zamow"], ["Kalkulator", "/slicer"], ["Drukarze", "/drukarze"], ["Jak to działa", "/#jak-to-dziala"]]],
+  ["Drukarze", [["Zostań drukarzem", "/rejestracja?rola=drukarz"], ["Giełda zleceń", "/zlecenia"], ["Panel", "/panel"], ["Profil", "/profil"]]],
+  ["Serwis", [["Regulamin", "/regulamin"], ["Prywatność", "/polityka-prywatnosci"], ["Logowanie", "/logowanie"], ["Rejestracja", "/rejestracja"]]],
+];
+
 export default function Footer() {
   return (
     <footer className="footer">
-      <div className="wrap footer-inner">
-        <div className="row" style={{ gap: 14 }}>
+      <div className="wrap footer-grid">
+        <div className="footer-brand">
           <span className="logo">
-            <Logo size={18} />
+            <Logo size={20} />
             WARSTWA
           </span>
-          <span className="dim">© {new Date().getFullYear()} · Sieć drukarzy 3D</span>
+          <p className="muted">
+            Sieć drukarzy 3D.
+            <br /> Od pliku do paczki.
+          </p>
         </div>
-        <nav aria-label="Stopka">
-          <Link href="/drukarze">Drukarze</Link>
-          <Link href="/#jak-to-dziala">Jak to działa</Link>
-          <Link href="/rejestracja">Zostań drukarzem</Link>
-          <Link href="/panel">Panel</Link>
-          <Link href="/regulamin">Regulamin</Link>
-          <Link href="/polityka-prywatnosci">Prywatność</Link>
-        </nav>
+        {COLS.map(([h, links]) => (
+          <nav key={h} aria-label={h} className="footer-col">
+            <span className="mono dim">{h}</span>
+            {links.map(([t, href]) => (
+              <Link key={href} href={href}>
+                {t}
+              </Link>
+            ))}
+          </nav>
+        ))}
+      </div>
+      <div className="footer-motif" aria-hidden>
+        <i />
+        <i />
+        <i />
+      </div>
+      <div className="wrap footer-base mono dim">
+        <span>© {new Date().getFullYear()} Warstwa · Sieć drukarzy 3D</span>
+        <span>
+          <Link href="/regulamin">Regulamin</Link> · <Link href="/polityka-prywatnosci">Prywatność</Link>
+        </span>
       </div>
     </footer>
   );

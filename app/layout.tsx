@@ -1,22 +1,18 @@
 import type { Metadata, Viewport } from "next";
-import { Figtree, JetBrains_Mono, Outfit } from "next/font/google";
+import { Host_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import "./bx.css";
 import Nav from "@/components/Nav";
 import Footer from "@/components/Footer";
 import { Analytics } from "@vercel/analytics/next";
 
-// Tekst i etykiety — Figtree: duża wysokość x, otwarte kształty, czytelna w małych rozmiarach
-const sans = Figtree({
+// Nagłówki i tekst — Host Grotesk: techniczny grotesk, czytelny także w małych stopniach
+const sans = Host_Grotesk({
   subsets: ["latin", "latin-ext"],
   variable: "--font-sans",
   display: "swap",
 });
-// Nagłówki i logo — Outfit: geometryczny krój w duchu Pantona
-const display = Outfit({
-  subsets: ["latin", "latin-ext"],
-  variable: "--font-display",
-  display: "swap",
-});
+// Etykiety, numery sekcji, dane z maszyny
 const mono = JetBrains_Mono({
   subsets: ["latin", "latin-ext"],
   variable: "--font-mono",
@@ -33,11 +29,13 @@ export const viewport: Viewport = { themeColor: "#0a0a0b" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="pl" className={`${sans.variable} ${display.variable} ${mono.variable}`}>
+    <html lang="pl" className={`${sans.variable} ${mono.variable}`}>
       <body>
-        <Nav />
-        <main>{children}</main>
-        <Footer />
+        <div className="shell">
+          <Nav />
+          <main>{children}</main>
+          <Footer />
+        </div>
         <Analytics />
       </body>
     </html>
