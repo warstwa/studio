@@ -426,3 +426,31 @@ export async function deleteOrderAction(_: FormState, f: FormData): Promise<Form
   revalidatePath("/zlecenia");
   redirect("/panel?widok=zamowienia");
 }
+
+/** Usunięcie konta — wymaga hasła i wpisania „USUŃ”. */
+export async function deleteAccountAction(_: FormState, f: FormData): Promise<FormState> {
+  const u = await requireUser("/profil");
+  if (DEMO_IDS.includes(u.id)) return { error: "Kont demonstracyjnych nie można usuwać." };
+  if (await rateLimited(`delete:${u.id}`, 5, 15 * 60)) return { error: "Zbyt wiele prób. Odczekaj chwilę." };
+  if (str(f, "confirm", 10).toUpperCase() !== "USUŃ") return { error: "Wpisz USUŃ, aby potwierdzić." };
+  if (!verifyPassword(String(f.get("password") ?? ""), u.passHash)) return { error: "Hasło jest nieprawidłowe." };
+  let files: string[];
+  try {
+    files = await D.deleteAccount(u);
+  } catch (e) {
+    return fail(e);
+  }
+  // zdjęcie profilowe i galeria — usuwamy z magazynu plików
+  if (files.length && process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const { del } = await import("@vercel/blob");
+      await del(files.filter((x) => x.startsWith("https://")));
+    } catch (e) {
+      console.error("Nie udało się usunąć plików konta", e);
+    }
+  }
+  await endAllSessions(u.id);
+  await endSession();
+  revalidatePath("/", "layout");
+  redirect("/?konto=usuniete");
+}

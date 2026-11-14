@@ -25,6 +25,7 @@ export interface User {
   maker?: MakerProfile;
   avatar?: string; // URL zdjęcia profilowego
   portfolio?: Attachment[]; // galeria realizacji (zdjęcia)
+  deletedAt?: number; // konto usunięte — zostaje tylko anonimowy ślad w historii zleceń
 }
 
 export type PublicUser = Omit<User, "passHash" | "email">;

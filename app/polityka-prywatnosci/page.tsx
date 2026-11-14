@@ -87,7 +87,7 @@ export default function Polityka() {
 
       <h2 id="p6">6. Jak długo przechowujemy dane</h2>
       <ul>
-        <li><b>Konto i profil</b> — do usunięcia konta.</li>
+        <li><b>Konto i profil</b> — do usunięcia konta. Konto usuniesz sam w <Link href="/profil#bezpieczenstwo">Profilu → Bezpieczeństwo</Link>: usuwamy wtedy imię i nazwisko, e-mail, hasło, opis, zdjęcie profilowe i galerię, a w historii zleceń i opiniach pozostaje oznaczenie „Usunięte konto”.</li>
         <li><b>Zamówienia, czat, oferty, opinie</b> — przez czas posiadania konta, a po jego usunięciu do upływu terminu przedawnienia roszczeń (co do zasady 6 lat, dla roszczeń okresowych i związanych z działalnością gospodarczą — 3 lata).</li>
         <li><b>Sesja logowania</b> — 30 dni lub do wylogowania.</li>
         <li><b>Adres IP do limitu prób</b> — 15 minut (logowanie) lub 1 godzina (rejestracja).</li>
@@ -115,7 +115,7 @@ export default function Polityka() {
       <ul>
         <li>dostępu do swoich danych i otrzymania ich kopii,</li>
         <li>sprostowania danych (większość możesz zmienić sam w <Link href="/profil">profilu</Link>),</li>
-        <li>usunięcia danych („prawo do bycia zapomnianym”),</li>
+        <li>usunięcia danych („prawo do bycia zapomnianym”) — konto możesz usunąć samodzielnie w Profilu,</li>
         <li>ograniczenia przetwarzania,</li>
         <li>przenoszenia danych,</li>
         <li>sprzeciwu wobec przetwarzania opartego na prawnie uzasadnionym interesie,</li>

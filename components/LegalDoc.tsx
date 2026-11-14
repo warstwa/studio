@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { LEGAL_UPDATED, OPERATOR } from "@/lib/legal";
+import { LEGAL_UPDATED } from "@/lib/legal";
 
 /** Wspólny układ dokumentów prawnych: nagłówek, spis treści, treść. */
 export default function LegalDoc({
@@ -24,11 +24,6 @@ export default function LegalDoc({
           </div>
           <span className="mono dim">Obowiązuje od {new Date(LEGAL_UPDATED + "T12:00").toLocaleDateString("pl-PL", { day: "numeric", month: "long", year: "numeric" })}</span>
         </div>
-        {!OPERATOR.complete && (
-          <div className="banner warn" style={{ marginBottom: 24 }}>
-            Wersja robocza — dane operatora serwisu nie zostały jeszcze uzupełnione. Dokument wymaga weryfikacji prawnej przed publicznym startem.
-          </div>
-        )}
         <div className="legal-layout">
           <nav className="legal-toc" aria-label="Spis treści">
             <span className="label">Spis treści</span>

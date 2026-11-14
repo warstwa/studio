@@ -217,7 +217,7 @@ export async function getUserByEmail(email: string) {
 export async function listUsers() {
   await ensureSeeded();
   const ids = await kv().smembers("users");
-  return (await kv().mget<User>(ids.map((i) => `user:${i}`))).filter(Boolean) as User[];
+  return ((await kv().mget<User>(ids.map((i) => `user:${i}`))).filter(Boolean) as User[]).filter((u) => !u.deletedAt);
 }
 
 export async function listMakers() {
@@ -1041,4 +1041,57 @@ async function seedV3() {
     await kv().set(`review:${r.requestId}`, r);
     await kv().sadd(`reviews:${r.makerId}`, r.requestId);
   }
+}
+
+/* ───────────────────────── usuwanie konta ───────────────────────── */
+
+const ACTIVE: RequestStatus[] = ["accepted", "printing", "ready", "help_requested"];
+
+/**
+ * Usuwa konto: dane osobowe znikają, w historii zleceń zostaje „Usunięte konto”.
+ * Zablokowane, gdy użytkownik ma zlecenia w realizacji (jako zamawiający lub drukarz).
+ * Szkice, zlecenia na giełdzie, zapytania i oferty bez rozstrzygnięcia są zamykane.
+ * Zwraca adresy plików profilu (avatar, galeria) do usunięcia z magazynu.
+ */
+export async function deleteAccount(user: User): Promise<string[]> {
+  const all = await listRequests();
+  const mine = (r: PrintRequest) => r.clientId === user.id || r.makerId === user.id;
+  const active = all.filter((r) => mine(r) && (ACTIVE.includes(r.status) || (r.status === "pending" && !!r.approval)));
+  if (active.length)
+    throw new DomainError(
+      `Masz zlecenia w realizacji (${active.slice(0, 5).map((r) => r.code).join(", ")}${active.length > 5 ? "…" : ""}). Zakończ je lub uzgodnij anulowanie, zanim usuniesz konto.`,
+    );
+
+  for (const r of all) {
+    if (r.clientId === user.id && ["draft", "open", "pending", "rejected"].includes(r.status)) {
+      if (r.status === "open")
+        for (const o of await listOffers(r.id)) if (o.status === "pending") await saveOffer({ ...o, status: "declined" });
+      r.status = "cancelled";
+      r.approval = undefined;
+      pushEvent(r, user.id, "cancelled", "Konto zamawiającego zostało usunięte.");
+      await saveRequest(r);
+    } else if (r.makerId === user.id && r.status === "pending") {
+      r.status = "rejected";
+      r.approval = undefined;
+      pushEvent(r, user.id, "rejected", "Konto drukarza zostało usunięte.");
+      await saveRequest(r);
+    }
+  }
+  for (const o of await listMakerOffers(user.id)) if (o.status === "pending") await saveOffer({ ...o, status: "withdrawn" });
+
+  const files = [user.avatar, ...(user.portfolio ?? []).map((p) => p.url)].filter((u): u is string => !!u && !u.startsWith("/demo/"));
+  const tomb: User = {
+    id: user.id,
+    name: "Usunięte konto",
+    email: "",
+    passHash: "",
+    role: "client",
+    city: "",
+    bio: "",
+    createdAt: user.createdAt,
+    deletedAt: Date.now(),
+  };
+  await kv().del(`email:${user.email}`);
+  await saveUser(tomb);
+  return files;
 }

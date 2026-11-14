@@ -9,7 +9,8 @@ import { MATERIALS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-export default async function Home() {
+export default async function Home({ searchParams }: { searchParams: Promise<{ konto?: string }> }) {
+  const { konto } = await searchParams;
   const makers = await listMakers();
   const reqs = await listRequests();
   const featured = makers.slice(0, 6).map(toPublic);
@@ -19,6 +20,7 @@ export default async function Home() {
 
   return (
     <>
+      {konto === "usuniete" && <div className="toast">Konto zostało usunięte. Dziękujemy, że byłeś(-aś) z nami.</div>}
       <section className="hero">
         <div className="wrap hero-grid">
           <div>

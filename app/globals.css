@@ -3389,3 +3389,20 @@ input[type="date"] {
     color: #000;
   }
 }
+
+/* ───── usuwanie konta ───── */
+.danger-zone {
+  margin-top: 4px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--stop) 35%, var(--line));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--stop) 4%, transparent);
+}
+.danger-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--muted);
+}

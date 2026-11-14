@@ -68,7 +68,7 @@ export default function Regulamin() {
         <li>Rejestracja wymaga podania imienia i nazwiska (lub nazwy), adresu e-mail, hasła oraz akceptacji Regulaminu. Podanie miasta jest dobrowolne.</li>
         <li>Umowa o świadczenie usług drogą elektroniczną (prowadzenie konta) zostaje zawarta z chwilą założenia konta, na czas nieoznaczony.</li>
         <li>Użytkownik zobowiązuje się podawać prawdziwe dane i nie udostępniać konta osobom trzecim. Jedna osoba może posiadać jedno konto.</li>
-        <li>Użytkownik może w każdej chwili zmienić hasło, wylogować się ze wszystkich urządzeń oraz żądać usunięcia konta, pisząc na {o.email}. Usunięcie konta nie wpływa na wykonanie Umów o wykonanie wydruku zawartych wcześniej.</li>
+        <li>Użytkownik może w każdej chwili zmienić hasło, wylogować się ze wszystkich urządzeń oraz usunąć konto w Profilu (sekcja „Bezpieczeństwo”). Usunięcie konta jest możliwe, gdy Użytkownik nie ma zleceń w realizacji; szkice i zlecenia oczekujące na oferty zostają anulowane, a oferty — wycofane. Usunięcie konta nie wpływa na Umowy o wykonanie wydruku wykonane wcześniej.</li>
         <li>Operator może zawiesić lub usunąć konto Użytkownika, który rażąco narusza Regulamin lub prawo, po uprzednim wezwaniu do zaprzestania naruszeń (chyba że naruszenie jest rażące lub niezgodne z prawem). Operator informuje Użytkownika o decyzji wraz z uzasadnieniem.</li>
       </ol>
 

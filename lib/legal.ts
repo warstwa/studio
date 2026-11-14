@@ -1,10 +1,8 @@
 /**
  * Dane operatora serwisu używane w Regulaminie i Polityce prywatności.
- * UZUPEŁNIJ przed publicznym startem — dopóki `complete` jest false, na obu stronach
- * wyświetla się informacja, że to wersja robocza.
+ * UZUPEŁNIJ pola w nawiasach kwadratowych danymi firmy.
  */
 export const OPERATOR = {
-  complete: false,
   name: "[NAZWA FIRMY / IMIĘ I NAZWISKO PRZEDSIĘBIORCY]",
   address: "[ADRES SIEDZIBY]",
   nip: "[NIP]",
