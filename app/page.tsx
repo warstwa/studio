@@ -241,15 +241,24 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ k
                 <span className="hide-sm">Maszyny</span>
                 <span className="hide-sm">Materiały</span>
                 <span>Ocena</span>
-                <span>Status</span>
+                <span className="mt-status">Status</span>
               </div>
               {top.map((u) => {
                 const m = u.maker!;
                 return (
                   <Link key={u.id} href={`/drukarze/${u.id}`} className="mtable-row">
-                    <span>
-                      <b>{u.name}</b>
-                      <span className="mono dim">{u.city}</span>
+                    <span className="mt-who">
+                      <span className="mt-photo" aria-hidden>
+                        {u.portfolio?.length ? (
+                          <img src={u.portfolio[0].url} alt="" loading="lazy" />
+                        ) : (
+                          <span className="mono">{u.name.split(" ").map((w) => w[0]).join("").slice(0, 2)}</span>
+                        )}
+                      </span>
+                      <span className="mt-name">
+                        <b>{u.name}</b>
+                        <span className="mono dim">{u.city}</span>
+                      </span>
                     </span>
                     <span className="hide-sm muted">{m.printers.slice(0, 2).join(", ")}</span>
                     <span className="hide-sm mono dim">{m.materials.slice(0, 4).join(" · ")}</span>
@@ -259,7 +268,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ k
                       </span>
                       <span className="code">{m.rating.toFixed(1)}</span>
                     </span>
-                    <span className={`mono ${m.available ? "accent" : "dim"}`}>{m.available ? "■ przyjmuje" : "□ zajęty"}</span>
+                    <span className={`mt-status mono ${m.available ? "accent" : "dim"}`}>{m.available ? "■ przyjmuje" : "□ zajęty"}</span>
                   </Link>
                 );
               })}
