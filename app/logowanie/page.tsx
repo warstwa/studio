@@ -44,7 +44,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
               </form>
             ))}
           </div>
-          <p className="mono dim" style={{ marginTop: 14 }}>Konta demo są wspólne — nie wpisuj w nich prawdziwych danych.</p>
+          <p className="mono dim" style={{ marginTop: 14 }}>Konta demo są włączone (tryb testowy).</p>
           </>)}
         </div>
       </div>

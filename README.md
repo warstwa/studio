@@ -46,7 +46,7 @@ pending ──akceptuj──▶ accepted ──▶ printing ──▶ ready ─�
 - Sesje po stronie serwera w Redisie (30 dni). W ciasteczku `warstwa_sid` (httpOnly, SameSite=Lax, Secure) jest losowy token, a w bazie tylko jego HMAC.
 - Wylogowanie usuwa sesję z bazy. Zmiana hasła i „Wyloguj ze wszystkich urządzeń” unieważniają wszystkie sesje.
 - Limity prób: 8 nieudanych logowań na e-mail i 30 na IP w ciągu 15 minut; 10 rejestracji z IP na godzinę.
-- Konta demo (przyciski na stronie logowania) można wyłączyć zmienną `DEMO_LOGIN=0`.
+- Konta demo są wyłączone (nie da się na nie zalogować). Do testów lokalnych można je włączyć zmienną `DEMO_LOGIN=1`.
 
 ## Lokalnie
 

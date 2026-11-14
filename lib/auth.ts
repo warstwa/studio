@@ -71,6 +71,8 @@ export const currentUser = cache(async (): Promise<User | null> => {
   if (!token || token.length > 100) return null;
   const s = await kv().get<Session>(sessionKey(token));
   if (!s) return null;
+  // sesje kont demo przestają działać, gdy konta demo są wyłączone
+  if (DEMO_IDS.includes(s.userId) && !demoLoginEnabled()) return null;
   return getUser(s.userId);
 });
 
@@ -103,6 +105,7 @@ export function safeNext(next: string | undefined | null, fallback = "/panel") {
 
 /** Konta demonstracyjne z danych startowych. */
 export const DEMO_IDS = ["u_kuba", "u_ola", "u_tomek", "u_marta", "u_piotr", "u_ania", "u_jan"];
+/** Konta demo są wyłączone, chyba że jawnie włączono je zmienną DEMO_LOGIN=1 (np. do testów lokalnych). */
 export function demoLoginEnabled() {
-  return process.env.DEMO_LOGIN !== "0";
+  return process.env.DEMO_LOGIN === "1";
 }

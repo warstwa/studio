@@ -57,7 +57,7 @@ export async function loginAction(_: FormState, f: FormData): Promise<FormState>
     return { error: "Zbyt wiele prób logowania. Odczekaj 15 minut i spróbuj ponownie." };
 
   const u = await D.getUserByEmail(email);
-  if (!u) {
+  if (!u || (DEMO_IDS.includes(u.id) && !demoLoginEnabled())) {
     burnTime(pw);
     return { error: "Nieprawidłowy e-mail lub hasło." };
   }
